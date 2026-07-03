@@ -4,19 +4,25 @@ app.py
 Flask backend for the public VUCA Newsletter Generator.
 
 Endpoints:
-  GET  /           — serves the upload page (frontend/index.html) directly,
-                      so the whole app lives at one URL. GitHub Pages is
-                      optional now — this exists for the simpler
-                      single-deployment setup.
-  GET  /health     — server / API-key / skill status, used by the frontend's
-                      status dot.
-  POST /generate    — accepts multipart form data (report file, image files,
-                      topic/custom_topic/language/audience/tone) and returns
-                      JSON with the structured newsletter content (rendered
-                      directly in the frontend page — no separate HTML file
-                      is generated) plus download URLs for the Word document
-                      and infographic JPG.
-  GET  /outputs/... — serves the generated files.
+  GET  /             — serves the upload page (frontend/index.html) directly,
+                        so the whole app lives at one URL. GitHub Pages is
+                        optional now — this exists for the simpler
+                        single-deployment setup.
+  GET  /health       — server / API-key / skill status, used by the frontend's
+                        status dot.
+  GET  /queue-status — how many seconds until the next generation slot opens
+                        up, without consuming one. Used by the frontend while
+                        it's waiting for its automatic retry.
+  POST /generate      — accepts multipart form data (report file, image files,
+                        topic/custom_topic/language/audience/tone). If another
+                        generation started too recently (see "Generation queue
+                        / rate gate" below), responds 429 with a wait_seconds
+                        the frontend uses to retry automatically — otherwise
+                        returns JSON with the structured newsletter content
+                        (rendered directly in the frontend page — no separate
+                        HTML file is generated) plus download URLs for the
+                        Word document and infographic JPG.
+  GET  /outputs/...   — serves the generated files.
 
 Run locally:
     (put GROQ_API_KEY in backend/.env)
@@ -26,6 +32,8 @@ served directly from the backend now.
 """
 
 import os
+import threading
+import time
 import traceback
 import uuid
 from pathlib import Path
@@ -56,6 +64,43 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 CORS(app)  # in case the frontend is ever served from a different origin
 
+# ── Generation queue / rate gate ─────────────────────────────────────
+#
+# Groq's free tier gives this app a shared ~8,000 tokens/minute budget
+# across EVERYONE hitting this backend — not per visitor. If two people
+# click Generate close together, even though Flask/gunicorn processes
+# requests one at a time, both generations still land inside the same
+# 60-second window and collide on that shared limit, causing a 429 from
+# Groq. The fix: track the last time a generation actually started, and
+# refuse (with a clear retry-after) any new one that arrives before
+# enough time has passed — regardless of whether it's a literal
+# concurrent request or just an unlucky-timing sequential one.
+#
+# This also happens to serialize genuinely simultaneous requests
+# correctly, since the check-and-reserve below is done under a lock.
+_rate_lock = threading.Lock()
+_last_generation_start = 0.0
+
+MIN_GENERATION_INTERVAL_SECONDS = int(os.environ.get("MIN_GENERATION_INTERVAL_SECONDS", "62"))
+
+
+def _reserve_generation_slot():
+    """
+    Atomically checks whether enough time has passed since the last
+    generation to safely start a new one without colliding on Groq's
+    shared rate limit. If allowed, reserves the slot immediately
+    (updates the timestamp) so a second caller checking right after
+    correctly sees the reservation. Returns (allowed, wait_seconds).
+    """
+    global _last_generation_start
+    with _rate_lock:
+        now = time.time()
+        elapsed = now - _last_generation_start
+        if elapsed >= MIN_GENERATION_INTERVAL_SECONDS:
+            _last_generation_start = now
+            return True, 0.0
+        return False, round(MIN_GENERATION_INTERVAL_SECONDS - elapsed, 1)
+
 
 @app.route("/", methods=["GET"])
 def serve_frontend():
@@ -82,8 +127,35 @@ def health():
     )
 
 
+@app.route("/queue-status", methods=["GET"])
+def queue_status():
+    """Lets the frontend show an accurate countdown while waiting, without
+    consuming a generation slot itself."""
+    with _rate_lock:
+        elapsed = time.time() - _last_generation_start
+    wait_seconds = max(0.0, round(MIN_GENERATION_INTERVAL_SECONDS - elapsed, 1))
+    return jsonify({"wait_seconds": wait_seconds, "available": wait_seconds <= 0})
+
+
 @app.route("/generate", methods=["POST"])
 def generate():
+    allowed, wait_seconds = _reserve_generation_slot()
+    if not allowed:
+        return (
+            jsonify(
+                {
+                    "busy": True,
+                    "wait_seconds": wait_seconds,
+                    "detail": (
+                        "Another newsletter was generated very recently — Groq's "
+                        f"shared free-tier rate limit needs about {int(wait_seconds) + 1} "
+                        "more second(s) to clear before the next one can start."
+                    ),
+                }
+            ),
+            429,
+        )
+
     job_id = uuid.uuid4().hex[:12]
     job_dir = OUTPUTS_DIR / job_id
 
