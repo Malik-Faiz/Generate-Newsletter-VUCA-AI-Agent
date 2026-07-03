@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: vuca-newsletter-backend
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    healthCheckPath: /health
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: GROQ_VISION_MODEL
+        value: meta-llama/llama-4-scout-17b-16e-instruct
+      - key: MAX_SKILL_CHARS
+        value: "1500"
+      - key: MAX_REPORT_CHARS
+        value: "1800"
+      - key: MAX_OUTPUT_TOKENS
+        value: "5500"

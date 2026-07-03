@@ -1,0 +1,986 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Generate Newsletter — VUCA AI Agent</title>
+<style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --navy:   #1A3A5C;
+      --blue:   #2E6DA4;
+      --light:  #E8F1FA;
+      --amber:  #E06C00;
+      --red:    #C0392B;
+      --green:  #27AE60;
+      --white:  #FFFFFF;
+      --gray:   #555555;
+      --gray-light: #F5F7FA;
+      --border: #D0DCE8;
+      --radius: 10px;
+      --shadow: 0 4px 24px rgba(26,58,92,0.10);
+    }
+
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Segoe UI', Calibri, Arial, sans-serif;
+      color: #222; background: var(--gray-light); line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    /* ── NAV ─────────────────────────────────────────────── */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(26,58,92,0.97); backdrop-filter: blur(8px);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 5%; height: 60px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+    }
+    .nav-brand { font-size: 1.1rem; font-weight: 700; color: var(--white); }
+    .nav-brand span { color: var(--amber); }
+
+    /* ── PAGE LAYOUT ─────────────────────────────────────── */
+    .page-wrap {
+      max-width: 1000px; margin: 40px auto; padding: 0 20px 60px;
+    }
+
+    .page-header { text-align: center; margin-bottom: 36px; }
+    .page-header h1 { font-size: 1.9rem; font-weight: 800; color: var(--navy); margin-bottom: 10px; }
+    .page-header p { font-size: 1rem; color: var(--gray); max-width: 600px; margin: 0 auto; }
+
+    /* ── STEP INDICATOR ──────────────────────────────────── */
+    .steps-bar {
+      display: flex; align-items: center; justify-content: center;
+      gap: 0; margin-bottom: 36px;
+    }
+    .step-item {
+      display: flex; align-items: center; gap: 8px;
+    }
+    .step-circle {
+      width: 32px; height: 32px; border-radius: 50%;
+      background: var(--border); color: var(--gray);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.82rem; font-weight: 700; flex-shrink: 0;
+      transition: background .3s, color .3s;
+    }
+    .step-circle.active { background: var(--amber); color: var(--white); }
+    .step-circle.done { background: var(--green); color: var(--white); }
+    .step-label { font-size: 0.80rem; font-weight: 600; color: var(--gray); white-space: nowrap; }
+    .step-label.active { color: var(--amber); }
+    .step-connector {
+      width: 60px; height: 2px; background: var(--border); margin: 0 8px;
+      flex-shrink: 0;
+    }
+
+    /* ── CARD ────────────────────────────────────────────── */
+    .card {
+      background: var(--white); border-radius: 14px;
+      border: 1px solid var(--border); box-shadow: var(--shadow);
+      padding: 32px; margin-bottom: 20px;
+    }
+    .card-title {
+      font-size: 1rem; font-weight: 700; color: var(--navy);
+      margin-bottom: 20px; display: flex; align-items: center; gap: 10px;
+    }
+    .card-title-icon {
+      width: 32px; height: 32px; border-radius: 8px;
+      background: var(--light); display: flex; align-items: center;
+      justify-content: center; font-size: 1rem; flex-shrink: 0;
+    }
+
+    /* ── DROP ZONES ──────────────────────────────────────── */
+    .drop-zone {
+      border: 2px dashed var(--border); border-radius: var(--radius);
+      padding: 32px 20px; text-align: center; cursor: pointer;
+      transition: border-color .2s, background .2s;
+      position: relative;
+    }
+    .drop-zone:hover, .drop-zone.drag-over {
+      border-color: var(--blue); background: var(--light);
+    }
+    .drop-zone input[type="file"] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+    }
+    .drop-icon { font-size: 2.2rem; margin-bottom: 10px; }
+    .drop-title { font-size: 0.95rem; font-weight: 600; color: var(--navy); margin-bottom: 4px; }
+    .drop-sub { font-size: 0.80rem; color: var(--gray); }
+    .drop-link { color: var(--blue); text-decoration: underline; cursor: pointer; }
+
+    /* File preview list */
+    .file-list { margin-top: 14px; }
+    .file-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 12px; background: var(--gray-light);
+      border-radius: 7px; margin-bottom: 6px; font-size: 0.83rem;
+    }
+    .file-item-icon { font-size: 1.1rem; }
+    .file-item-name { color: var(--navy); font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-item-size { color: var(--gray); font-size: 0.75rem; flex-shrink: 0; }
+    .file-item-remove {
+      cursor: pointer; color: var(--gray); font-size: 1.1rem; flex-shrink: 0;
+      background: none; border: none; padding: 0; line-height: 1;
+    }
+    .file-item-remove:hover { color: var(--red); }
+
+    /* Image thumbnails */
+    .thumb-grid { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+    .thumb-wrap { position: relative; width: 80px; height: 80px; }
+    .thumb-wrap img {
+      width: 80px; height: 80px; object-fit: cover; border-radius: 7px;
+      border: 1px solid var(--border);
+    }
+    .thumb-remove {
+      position: absolute; top: -6px; right: -6px;
+      background: var(--red); color: var(--white); border: none;
+      border-radius: 50%; width: 18px; height: 18px; cursor: pointer;
+      font-size: 0.70rem; display: flex; align-items: center; justify-content: center;
+      font-weight: 700;
+    }
+
+    /* ── OPTIONS GRID ────────────────────────────────────── */
+    .options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .option-group label {
+      display: block; font-size: 0.80rem; font-weight: 700; color: var(--navy);
+      margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.4px;
+    }
+    .option-group select,
+    .option-group input[type="text"] {
+      width: 100%; padding: 9px 12px;
+      border: 1.5px solid var(--border); border-radius: 7px;
+      font-size: 0.90rem; font-family: inherit; color: #222;
+      background: var(--white); outline: none;
+      transition: border-color .2s, box-shadow .2s;
+    }
+    .option-group select:focus,
+    .option-group input:focus {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px rgba(46,109,164,0.10);
+    }
+    .custom-topic-row { display: none; }
+    .custom-topic-row.visible { display: block; }
+
+    /* ── SERVER CONFIG ───────────────────────────────────── */
+    .server-row {
+      display: flex; align-items: center; gap: 10px;
+      background: var(--gray-light); border-radius: 8px; padding: 10px 14px;
+      margin-bottom: 20px;
+    }
+    .server-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--border); flex-shrink: 0;
+      transition: background .3s;
+    }
+    .server-dot.online { background: var(--green); }
+    .server-dot.offline { background: var(--red); }
+    .server-status { font-size: 0.80rem; color: var(--gray); flex: 1; }
+    .server-url-input {
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 5px 10px; font-size: 0.80rem; color: var(--navy);
+      font-family: monospace; width: 260px;
+    }
+    .check-btn {
+      background: var(--light); color: var(--blue); border: 1px solid var(--border);
+      border-radius: 6px; padding: 5px 12px; font-size: 0.80rem; font-weight: 600;
+      cursor: pointer;
+    }
+    .check-btn:hover { background: var(--blue); color: var(--white); }
+
+    /* ── GENERATE BUTTON ─────────────────────────────────── */
+    .generate-btn {
+      width: 100%; padding: 16px;
+      background: linear-gradient(135deg, var(--navy), #1B4580);
+      color: var(--white); border: none; border-radius: 10px;
+      font-size: 1.05rem; font-weight: 700; cursor: pointer;
+      transition: opacity .2s, transform .15s, box-shadow .2s;
+      box-shadow: 0 4px 18px rgba(26,58,92,0.25);
+      letter-spacing: 0.3px;
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+    }
+    .generate-btn:hover:not(:disabled) {
+      transform: translateY(-2px); box-shadow: 0 8px 28px rgba(26,58,92,0.30);
+    }
+    .generate-btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+    .generate-btn.running { background: linear-gradient(135deg, #c05a00, var(--amber)); }
+
+    /* ── PROGRESS ────────────────────────────────────────── */
+    .progress-card {
+      display: none; background: var(--white);
+      border-radius: 14px; border: 1px solid var(--border);
+      box-shadow: var(--shadow); padding: 32px; margin-bottom: 20px;
+      text-align: center;
+    }
+    .progress-card.visible { display: block; }
+    .spinner {
+      width: 52px; height: 52px; border-radius: 50%;
+      border: 4px solid var(--light);
+      border-top-color: var(--amber);
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 18px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .progress-title { font-size: 1rem; font-weight: 700; color: var(--navy); margin-bottom: 6px; }
+    .progress-sub { font-size: 0.85rem; color: var(--gray); }
+    .progress-dots::after {
+      content: ''; animation: dots 1.5s infinite;
+    }
+    @keyframes dots {
+      0%   { content: '.';   }
+      33%  { content: '..';  }
+      66%  { content: '...'; }
+      100% { content: '';    }
+    }
+
+    /* ── ERROR ───────────────────────────────────────────── */
+    .error-card {
+      display: none; background: #FDECEA;
+      border: 1px solid #F5B8B3; border-radius: 14px;
+      padding: 24px; margin-bottom: 20px;
+    }
+    .error-card.visible { display: block; }
+    .error-card h3 { color: var(--red); font-size: 0.97rem; margin-bottom: 6px; }
+    .error-card p { font-size: 0.87rem; color: #7B241C; line-height: 1.6; }
+
+    /* ── RESULT ──────────────────────────────────────────── */
+    .result-card {
+      display: none; background: var(--white);
+      border-radius: 14px; border: 1px solid var(--border);
+      box-shadow: var(--shadow); overflow: hidden; margin-bottom: 20px;
+    }
+    .result-card.visible { display: block; }
+
+    .result-header {
+      background: #FAF8F4;
+      padding: 24px 44px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: 12px;
+    }
+    .result-header h3 { font-size: 1.05rem; font-weight: 700; color: var(--navy); }
+    .result-header p { font-size: 0.80rem; color: var(--gray); margin-top: 3px; }
+    .result-actions { display: flex; gap: 10px; flex-shrink: 0; flex-wrap: wrap; }
+    .dl-btn {
+      display: flex; align-items: center; gap: 6px;
+      padding: 9px 18px; border-radius: 7px;
+      font-size: 0.85rem; font-weight: 600; text-decoration: none;
+      transition: transform .15s, opacity .2s; cursor: pointer; border: none;
+    }
+    .dl-btn-docx { background: var(--navy); color: var(--white); }
+    .dl-btn-jpg { background: var(--white); color: var(--navy); border: 1px solid var(--border); }
+    .dl-btn:hover { transform: translateY(-1px); opacity: 0.92; }
+
+    /* ── DOCUMENT PREVIEW (inline, no iframe) ─────────────────────── */
+    .doc-preview {
+      padding: 36px 44px 44px;
+      background: #FAF8F4;
+      max-height: 720px;
+      overflow-y: auto;
+    }
+    .doc-kicker {
+      font-size: 0.75rem; font-weight: 700; letter-spacing: 1px;
+      color: var(--gray); text-transform: uppercase; margin-bottom: 6px;
+    }
+    .doc-title { font-size: 1.7rem; font-weight: 800; color: var(--navy); margin-bottom: 6px; line-height: 1.25; }
+    .doc-subtitle { font-size: 1.05rem; color: var(--blue); font-style: italic; margin-bottom: 6px; }
+    .doc-issue { font-size: 0.80rem; color: var(--gray); margin-bottom: 22px; }
+    .doc-lead {
+      font-size: 1.1rem; line-height: 1.65; color: #222; margin-bottom: 26px;
+      padding-bottom: 22px; border-bottom: 1px solid var(--border);
+    }
+    .doc-stats { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 30px; }
+    .doc-stat {
+      background: var(--white); border: 1px solid var(--border); border-radius: 8px;
+      padding: 12px 16px; min-width: 110px; text-align: center;
+    }
+    .doc-stat-value { font-size: 1.3rem; font-weight: 800; color: var(--amber); }
+    .doc-stat-label { font-size: 0.72rem; color: var(--gray); margin-top: 2px; }
+    .doc-section { margin-bottom: 28px; }
+    .doc-section-label {
+      font-size: 0.72rem; font-weight: 700; letter-spacing: 0.6px; color: var(--blue);
+      text-transform: uppercase; border-bottom: 2px solid var(--border);
+      padding-bottom: 6px; margin-bottom: 8px;
+    }
+    .doc-section h4 { font-size: 1.25rem; color: var(--navy); margin-bottom: 8px; }
+    .doc-section p { font-size: 0.95rem; line-height: 1.65; color: #222; margin-bottom: 10px; }
+    .doc-section ul { margin: 0 0 10px 20px; }
+    .doc-section li { font-size: 0.92rem; line-height: 1.6; margin-bottom: 4px; }
+    .doc-quote {
+      font-style: italic; color: var(--blue); border-left: 3px solid var(--blue);
+      padding-left: 14px; margin: 12px 0; font-size: 1rem;
+    }
+    .doc-section-images { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 14px; }
+    .doc-section-figure { margin: 0; flex: 1 1 220px; max-width: 320px; }
+    .doc-section-figure img { width: 100%; border-radius: 8px; display: block; border: 1px solid var(--border); }
+    .doc-section-figure figcaption { font-size: 0.72rem; color: var(--gray); margin-top: 5px; text-align: center; }
+    .doc-vuca-heading {
+      background: var(--navy); color: var(--white); text-align: center;
+      padding: 16px; border-radius: 8px; margin: 30px 0 16px; font-weight: 800;
+    }
+    .doc-vuca-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap: 14px; margin-bottom: 30px; }
+    .doc-vuca-block { background: var(--white); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+    .doc-vuca-letter { font-size: 1.8rem; font-weight: 800; color: var(--amber); line-height: 1; }
+    .doc-vuca-word { font-weight: 700; margin: 2px 0; }
+    .doc-vuca-sub { font-size: 0.78rem; color: var(--gray); margin-bottom: 8px; }
+    .doc-vuca-reality { font-size: 0.85rem; background: var(--gray-light); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+    .doc-vuca-response-label { font-size: 0.72rem; font-weight: 700; color: var(--blue); text-transform: uppercase; margin-bottom: 4px; display: block; }
+    .doc-vuca-block ul { margin: 0 0 0 16px; font-size: 0.85rem; }
+    .doc-playbook { background: var(--navy); border-radius: 10px; padding: 24px; margin-bottom: 26px; }
+    .doc-playbook h4 { color: var(--white); text-align: center; margin-bottom: 16px; }
+    .doc-playbook-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: 12px; }
+    .doc-playbook-card { background: rgba(255,255,255,0.08); border-radius: 8px; padding: 14px; }
+    .doc-playbook-label { color: var(--amber); font-size: 0.78rem; font-weight: 700; margin-bottom: 4px; }
+    .doc-playbook-title { color: var(--white); font-weight: 700; font-size: 0.9rem; margin-bottom: 4px; }
+    .doc-playbook-desc { color: rgba(255,255,255,0.75); font-size: 0.82rem; }
+    .doc-closing { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+    .doc-closing-cell { border-radius: 8px; padding: 16px; }
+    .doc-closing-cell.dark { background: var(--navy); color: var(--white); }
+    .doc-closing-cell.light { background: var(--white); border: 1px solid var(--border); }
+    .doc-closing-cell h5 { margin-bottom: 6px; }
+    .doc-closing-cell p { font-size: 0.88rem; }
+    .doc-footer-note { font-size: 0.78rem; color: var(--gray); text-align: center; padding-top: 16px; border-top: 1px solid var(--border); }
+    @media (max-width: 640px) {
+      .doc-preview { padding: 24px 20px 30px; }
+      .doc-closing { grid-template-columns: 1fr; }
+    }
+
+    /* ── RESET ───────────────────────────────────────────── */
+    .reset-row { text-align: center; margin-top: 6px; }
+    .reset-btn {
+      background: none; border: 1px solid var(--border);
+      color: var(--gray); padding: 8px 20px; border-radius: 7px;
+      font-size: 0.85rem; cursor: pointer;
+    }
+    .reset-btn:hover { border-color: var(--navy); color: var(--navy); }
+
+    /* ── RESPONSIVE ──────────────────────────────────────── */
+    @media (max-width: 640px) {
+      .options-grid { grid-template-columns: 1fr; }
+      .result-header { flex-direction: column; align-items: flex-start; gap: 12px; }
+      .steps-bar { display: none; }
+      .server-row { flex-wrap: wrap; }
+      .server-url-input { width: 100%; }
+    }
+</style>
+</head>
+<body>
+
+<!-- ── NAV ─────────────────────────────────────────────────────────── -->
+<nav>
+  <div class="nav-brand">VUCA <span>Newsletter Generator</span></div>
+</nav>
+
+<!-- ── PAGE ────────────────────────────────────────────────────────── -->
+<div class="page-wrap">
+
+  <!-- Header -->
+  <div class="page-header">
+    <h1>Generate Your Newsletter</h1>
+    <p>Upload your source material and configure options — the AI agent will produce a
+       complete, publication-ready VUCA Leadership newsletter.</p>
+  </div>
+
+  <!-- Step indicator -->
+  <div class="steps-bar">
+    <div class="step-item">
+      <div class="step-circle active" id="step1-circle">1</div>
+      <span class="step-label active" id="step1-label">Upload Files</span>
+    </div>
+    <div class="step-connector"></div>
+    <div class="step-item">
+      <div class="step-circle" id="step2-circle">2</div>
+      <span class="step-label" id="step2-label">Configure</span>
+    </div>
+    <div class="step-connector"></div>
+    <div class="step-item">
+      <div class="step-circle" id="step3-circle">3</div>
+      <span class="step-label" id="step3-label">Generate</span>
+    </div>
+    <div class="step-connector"></div>
+    <div class="step-item">
+      <div class="step-circle" id="step4-circle">4</div>
+      <span class="step-label" id="step4-label">Download</span>
+    </div>
+  </div>
+
+  <!-- Server status -->
+  <div class="server-row">
+    <div class="server-dot offline" id="serverDot"></div>
+    <span class="server-status" id="serverStatus">Checking server…</span>
+    <input class="server-url-input" id="serverUrl" type="text" value="">
+    <button class="check-btn" onclick="checkServer()">Check</button>
+  </div>
+
+  <!-- ── STEP 1: Upload Report ─────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-title">
+      <div class="card-title-icon">📄</div>
+      Source Document — Text Report <span style="color:var(--gray);font-weight:400;font-size:0.85rem;margin-left:6px;">(optional)</span>
+    </div>
+    <div class="drop-zone" id="reportZone">
+      <input type="file" id="reportFile" accept=".pdf,.docx,.doc,.txt,.md" onchange="handleReportFile(this)">
+      <div class="drop-icon">📋</div>
+      <div class="drop-title">Drop your report here or <span class="drop-link">browse</span></div>
+      <div class="drop-sub">Accepts PDF, Word (.docx), or plain text — any length</div>
+    </div>
+    <div class="file-list" id="reportList"></div>
+  </div>
+
+  <!-- ── STEP 2: Upload Images ─────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-title">
+      <div class="card-title-icon">🖼️</div>
+      Slide Images <span style="color:var(--gray);font-weight:400;font-size:0.85rem;margin-left:6px;">(optional — PNG, JPG)</span>
+    </div>
+    <div class="drop-zone" id="imageZone">
+      <input type="file" id="imageFiles" accept="image/png,image/jpeg,image/jpg,image/webp" multiple="" onchange="handleImageFiles(this)">
+      <div class="drop-icon">🖼️</div>
+      <div class="drop-title">Drop slide images here or <span class="drop-link">browse</span></div>
+      <div class="drop-sub">From exported PPTX slides or any source imagery — multiple files accepted</div>
+    </div>
+    <div class="thumb-grid" id="thumbGrid"></div>
+  </div>
+
+  <!-- ── STEP 3: Options ───────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-title">
+      <div class="card-title-icon">⚙️</div>
+      Newsletter Options
+    </div>
+    <div class="options-grid">
+      <div class="option-group">
+        <label>Topic Template</label>
+        <select id="topicSelect" onchange="handleTopicChange()">
+          <option value="energy">Energy &amp; Oil Markets</option>
+          <option value="war">Geopolitical &amp; War Analysis</option>
+          <option value="psychology">Human Behaviour &amp; Psychology</option>
+          <option value="strategy" selected>Strategic Intelligence Briefing</option>
+          <option value="lessons">Lessons Learned / Field Analysis</option>
+          <option value="custom">Custom Topic…</option>
+        </select>
+      </div>
+      <div class="option-group">
+        <label>Language</label>
+        <select id="languageSelect">
+          <option value="English">English</option>
+          <option value="Turkish">Turkish (Türkçe)</option>
+          <option value="Arabic">Arabic (عربي)</option>
+          <option value="French">French (Français)</option>
+          <option value="German">German (Deutsch)</option>
+          <option value="Spanish">Spanish (Español)</option>
+        </select>
+      </div>
+      <div class="option-group custom-topic-row" id="customTopicRow">
+        <label>Your Topic</label>
+        <input type="text" id="customTopicInput" placeholder="Describe your specific topic…">
+      </div>
+      <div class="option-group">
+        <label>Target Audience</label>
+        <select id="audienceSelect">
+          <option value="Energy sector executives and investors">Energy sector executives</option>
+          <option value="C-suite leaders and senior management">C-suite &amp; senior management</option>
+          <option value="Oil &amp; gas professionals and engineers">Oil &amp; gas professionals</option>
+          <option value="Investment professionals and fund managers">Investment professionals</option>
+          <option value="Policy makers and government officials">Policy makers</option>
+          <option value="General business audience">General business audience</option>
+        </select>
+      </div>
+      <div class="option-group">
+        <label>Tone</label>
+        <select id="toneSelect">
+          <option value="Intelligence briefing — direct, data-driven">Intelligence briefing</option>
+          <option value="Thought leadership — analytical, forward-looking">Thought leadership</option>
+          <option value="Field analysis — grounded, lessons-focused">Field analysis</option>
+          <option value="Executive summary — concise, decision-oriented">Executive summary</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- Generate button -->
+  <button class="generate-btn" id="generateBtn" onclick="generate()">
+    <span id="generateIcon">⚡</span>
+    <span id="generateText">Generate Newsletter</span>
+  </button>
+
+  <!-- Error display -->
+  <div class="error-card" id="errorCard">
+    <h3>Generation Error</h3>
+    <p id="errorMsg"></p>
+  </div>
+
+  <!-- Progress display -->
+  <div class="progress-card" id="progressCard">
+    <div class="spinner"></div>
+    <div class="progress-title">Generating your newsletter<span class="progress-dots"></span></div>
+    <div class="progress-sub" id="progressSub">Reading source material and analysing content…</div>
+  </div>
+
+  <!-- Result display -->
+  <div class="result-card" id="resultCard">
+    <div class="result-header">
+      <div>
+        <h3 id="resultTitle">Newsletter Generated</h3>
+        <p>Preview below, or download the Word document.</p>
+      </div>
+      <div class="result-actions">
+        <a id="dlDocx" class="dl-btn dl-btn-docx" download="newsletter.docx">⬇ Download Word (.docx)</a>
+        <a id="dlJpg" class="dl-btn dl-btn-jpg" download="infographic.jpg">⬇ Infographic</a>
+      </div>
+    </div>
+    <div class="doc-preview" id="docPreview"></div>
+  </div>
+
+  <!-- Reset -->
+  <div class="reset-row" id="resetRow" style="display:none;">
+    <button class="reset-btn" onclick="resetForm()">Generate Another Newsletter</button>
+  </div>
+
+</div><!-- /page-wrap -->
+
+<script>
+// ── State ────────────────────────────────────────────────────────────
+let reportFileObj   = null;
+let imageFileObjs   = [];
+
+// ── PRODUCTION BACKEND URL ──────────────────────────────────────────
+// If you're hosting this page somewhere that is NOT the same server as
+// your Flask backend (e.g. this file on GitHub Pages, backend on
+// Render) — which is the common free-hosting setup — paste your
+// backend's public URL here after deploying it. Leave blank for local
+// development; the auto-detection below handles that case on its own.
+//
+// Example after deploying to Render:
+//   const PRODUCTION_BACKEND_URL = "https://vuca-newsletter-backend.onrender.com";
+const PRODUCTION_BACKEND_URL = "";
+
+// Default server URL. If the page itself is being served from a known
+// frontend dev-tool port (VS Code Live Server's 5500/5501, common
+// webpack/vite/CRA dev ports, etc.) or from file://, that's almost
+// certainly NOT the backend — default straight to the backend's own
+// local port instead. If PRODUCTION_BACKEND_URL is set above and we're
+// not in a local-dev context, use that (this is the GitHub Pages +
+// Render style deployment, where frontend and backend are different
+// domains, so "same origin" would be wrong). Otherwise assume
+// frontend + backend are deployed together behind the same origin.
+(function initServerUrl() {
+  const input = document.getElementById("serverUrl");
+  const BACKEND_DEFAULT = "http://localhost:7755";
+  const KNOWN_FRONTEND_DEV_PORTS = new Set([
+    "5500", "5501",      // VS Code Live Server
+    "3000", "3001",      // Create React App / Next.js
+    "5173", "4173",      // Vite
+    "8080", "8081",      // webpack-dev-server / generic
+    "4200",              // Angular CLI
+  ]);
+
+  const loc = window.location;
+  const sameOrigin = loc.origin;
+  const isFileProtocol = loc.protocol === "file:";
+  const currentPort = loc.port;
+  const isLocalDev = isFileProtocol || !sameOrigin.startsWith("http") || sameOrigin === "null"
+    || KNOWN_FRONTEND_DEV_PORTS.has(currentPort) || loc.hostname === "localhost" || loc.hostname === "127.0.0.1";
+
+  if (isLocalDev) {
+    input.value = BACKEND_DEFAULT;
+  } else if (PRODUCTION_BACKEND_URL) {
+    input.value = PRODUCTION_BACKEND_URL;
+  } else {
+    input.value = sameOrigin;
+  }
+})();
+let serverBaseUrl = () => document.getElementById("serverUrl").value.trim().replace(/\/$/, "");
+
+// ── Drag & drop setup ─────────────────────────────────────────────────
+function setupDrop(zoneId) {
+  const zone = document.getElementById(zoneId);
+  zone.addEventListener("dragover", e => { e.preventDefault(); zone.classList.add("drag-over"); });
+  zone.addEventListener("dragleave", () => zone.classList.remove("drag-over"));
+  zone.addEventListener("drop", e => {
+    e.preventDefault();
+    zone.classList.remove("drag-over");
+    const files = e.dataTransfer.files;
+    if (zoneId === "reportZone") {
+      handleReportFileObj(files[0]);
+    } else {
+      handleImageFileObjs(files);
+    }
+  });
+}
+setupDrop("reportZone");
+setupDrop("imageZone");
+
+// ── Report file handling ──────────────────────────────────────────────
+function handleReportFile(input) {
+  if (input.files[0]) handleReportFileObj(input.files[0]);
+}
+function handleReportFileObj(file) {
+  if (!file) return;
+  reportFileObj = file;
+  renderReportList();
+}
+function renderReportList() {
+  const list = document.getElementById("reportList");
+  if (!reportFileObj) { list.innerHTML = ""; return; }
+  const size = (reportFileObj.size / 1024).toFixed(0);
+  list.innerHTML = `
+    <div class="file-item">
+      <span class="file-item-icon">${fileIcon(reportFileObj.name)}</span>
+      <span class="file-item-name">${esc(reportFileObj.name)}</span>
+      <span class="file-item-size">${size} KB</span>
+      <button class="file-item-remove" onclick="removeReport()" title="Remove">×</button>
+    </div>`;
+}
+function removeReport() {
+  reportFileObj = null;
+  document.getElementById("reportFile").value = "";
+  renderReportList();
+}
+
+// ── Image file handling ───────────────────────────────────────────────
+function handleImageFiles(input) {
+  handleImageFileObjs(input.files);
+}
+function handleImageFileObjs(files) {
+  for (const f of files) {
+    if (!imageFileObjs.some(x => x.name === f.name && x.size === f.size)) {
+      imageFileObjs.push(f);
+    }
+  }
+  renderThumbs();
+}
+function renderThumbs() {
+  const grid = document.getElementById("thumbGrid");
+  grid.innerHTML = "";
+  imageFileObjs.forEach((f, i) => {
+    const url = URL.createObjectURL(f);
+    const wrap = document.createElement("div");
+    wrap.className = "thumb-wrap";
+    wrap.innerHTML = `
+      <img src="${url}" alt="${esc(f.name)}" title="${esc(f.name)}" />
+      <button class="thumb-remove" onclick="removeImage(${i})">×</button>`;
+    grid.appendChild(wrap);
+  });
+}
+function removeImage(idx) {
+  imageFileObjs.splice(idx, 1);
+  document.getElementById("imageFiles").value = "";
+  renderThumbs();
+}
+
+// ── Topic selector ────────────────────────────────────────────────────
+function handleTopicChange() {
+  const val = document.getElementById("topicSelect").value;
+  const row = document.getElementById("customTopicRow");
+  if (val === "custom") {
+    row.classList.add("visible");
+  } else {
+    row.classList.remove("visible");
+  }
+}
+
+// ── Server health check ───────────────────────────────────────────────
+async function checkServer() {
+  const dot    = document.getElementById("serverDot");
+  const status = document.getElementById("serverStatus");
+  dot.className = "server-dot";
+  status.textContent = "Checking…";
+  try {
+    const res = await fetch(serverBaseUrl() + "/health", { signal: AbortSignal.timeout(4000) });
+    const data = await res.json();
+    dot.className = "server-dot online";
+    const apiOk = data.api_key_set ? "API key set ✓" : "API key NOT set ✗";
+    status.textContent = `Server online ✓  ·  Skill: ${data.skill_loaded ? "loaded ✓" : "fallback"}  ·  ${apiOk}`;
+  } catch (e) {
+    dot.className = "server-dot offline";
+    status.textContent = "Server offline — start the backend (python app.py)";
+  }
+}
+checkServer();
+
+// ── Progress messages ─────────────────────────────────────────────────
+const progressMessages = [
+  "Reading source material and analysing content…",
+  "Mapping content to VUCA framework dimensions…",
+  "Writing newsletter sections with data and context…",
+  "Building VUCA blocks with leadership prescriptions…",
+  "Applying visual design and typography system…",
+  "Generating Word document and infographic…",
+  "Almost done — finalising output…",
+];
+let progressInterval;
+function startProgressCycle() {
+  let idx = 0;
+  const el = document.getElementById("progressSub");
+  el.textContent = progressMessages[0];
+  progressInterval = setInterval(() => {
+    idx = (idx + 1) % progressMessages.length;
+    el.textContent = progressMessages[idx];
+  }, 4500);
+}
+function stopProgressCycle() {
+  clearInterval(progressInterval);
+}
+
+// ── Generate ──────────────────────────────────────────────────────────
+async function generate() {
+  hideAll();
+
+  const fd = new FormData();
+  if (reportFileObj)       fd.append("report", reportFileObj);
+  imageFileObjs.forEach(f => fd.append("images", f));
+  fd.append("topic",        document.getElementById("topicSelect").value);
+  fd.append("custom_topic", document.getElementById("customTopicInput").value);
+  fd.append("language",     document.getElementById("languageSelect").value);
+  fd.append("audience",     document.getElementById("audienceSelect").value);
+  fd.append("tone",         document.getElementById("toneSelect").value);
+
+  const btn = document.getElementById("generateBtn");
+  btn.disabled = true;
+  btn.classList.add("running");
+  document.getElementById("generateText").textContent = "Generating…";
+  document.getElementById("generateIcon").textContent = "⏳";
+
+  document.getElementById("progressCard").classList.add("visible");
+  startProgressCycle();
+
+  setStep(3);
+
+  try {
+    const res = await fetch(serverBaseUrl() + "/generate", {
+      method: "POST",
+      body: fd,
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data.detail || `Server error ${res.status}`);
+    }
+
+    stopProgressCycle();
+    document.getElementById("progressCard").classList.remove("visible");
+
+    // Show the result card and wire up downloads FIRST, before attempting
+    // to render the detailed preview — this way, even if something about
+    // the preview rendering breaks, the Word document (which was already
+    // generated successfully server-side) is still reachable.
+    document.getElementById("resultTitle").textContent = data.title || "Newsletter Ready";
+
+    const base = serverBaseUrl();
+
+    const dlDocx = document.getElementById("dlDocx");
+    if (data.docx_url) { dlDocx.href = base + data.docx_url; dlDocx.style.display = ""; }
+    else { dlDocx.style.display = "none"; }
+
+    const dlJpg = document.getElementById("dlJpg");
+    if (data.infographic_url) { dlJpg.href = base + data.infographic_url; dlJpg.style.display = ""; }
+    else { dlJpg.style.display = "none"; }
+
+    document.getElementById("resultCard").classList.add("visible");
+    document.getElementById("resetRow").style.display = "block";
+    document.getElementById("resultCard").scrollIntoView({ behavior: "smooth", block: "start" });
+    setStep(4);
+
+    // Preview rendering is isolated: if it throws for any reason (e.g. the
+    // model returned an unexpected shape), fall back to a readable raw
+    // dump instead of leaving the preview area blank or breaking the flow
+    // above.
+    try {
+      renderDocPreview(data.content || {}, buildImageUrlMap());
+    } catch (renderErr) {
+      console.error("Preview render failed:", renderErr);
+      document.getElementById("docPreview").innerHTML =
+        '<p style="color:var(--gray);font-size:0.85rem;margin-bottom:10px;">' +
+        "Couldn't render the formatted preview, but your document generated " +
+        "successfully — use the download button above. Raw content:</p>" +
+        "<pre style=\"white-space:pre-wrap;font-size:0.78rem;color:#333;background:#fff;" +
+        "padding:14px;border-radius:6px;border:1px solid var(--border);\">" +
+        esc(JSON.stringify(data.content || {}, null, 2)) + "</pre>";
+    }
+
+  } catch (err) {
+    stopProgressCycle();
+    document.getElementById("progressCard").classList.remove("visible");
+
+    let msg = err.message || "Unknown error";
+    if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("net::ERR")) {
+      msg = "Cannot reach the server at " + serverBaseUrl() + ". Make sure the backend is running.";
+    }
+    console.error("Generate failed:", err);
+    document.getElementById("errorMsg").textContent = msg;
+    document.getElementById("errorCard").classList.add("visible");
+    setStep(1);
+  }
+
+  btn.disabled = false;
+  btn.classList.remove("running");
+  document.getElementById("generateText").textContent = "Generate Newsletter";
+  document.getElementById("generateIcon").textContent = "⚡";
+}
+
+// ── Step indicator ────────────────────────────────────────────────────
+function setStep(n) {
+  [1,2,3,4].forEach(i => {
+    const c = document.getElementById("step" + i + "-circle");
+    const l = document.getElementById("step" + i + "-label");
+    c.className = "step-circle" + (i < n ? " done" : i === n ? " active" : "");
+    l.className = "step-label" + (i === n ? " active" : "");
+    if (i < n) c.textContent = "✓";
+    else c.textContent = i;
+  });
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────
+function hideAll() {
+  document.getElementById("errorCard").classList.remove("visible");
+  document.getElementById("progressCard").classList.remove("visible");
+  document.getElementById("resultCard").classList.remove("visible");
+  document.getElementById("resetRow").style.display = "none";
+}
+function resetForm() {
+  reportFileObj = null;
+  imageFileObjs = [];
+  document.getElementById("reportFile").value = "";
+  document.getElementById("imageFiles").value = "";
+  renderReportList();
+  renderThumbs();
+  hideAll();
+  setStep(1);
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+function fileIcon(name) {
+  const ext = name.split(".").pop().toLowerCase();
+  return { pdf: "📕", docx: "📘", doc: "📘", txt: "📃", md: "📃" }[ext] || "📄";
+}
+function esc(str) {
+  return String(str).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+// ── Render the structured newsletter content inline (no separate HTML file) ──
+// Build a filename -> local object URL map from the files the person
+// already uploaded (we have them in memory client-side — no need to
+// round-trip image bytes through the backend just to preview them).
+function buildImageUrlMap() {
+  const map = {};
+  imageFileObjs.forEach(f => {
+    map[f.name] = URL.createObjectURL(f);
+  });
+  return map;
+}
+
+function renderDocPreview(content, imageUrlMap) {
+  imageUrlMap = imageUrlMap || {};
+  const el = document.getElementById("docPreview");
+  const arr = (v) => Array.isArray(v) ? v : [];
+  const str = (v) => (v === undefined || v === null) ? "" : String(v);
+  const parts = [];
+
+  parts.push(`<div class="doc-kicker">VUCA Leadership Intelligence</div>`);
+  parts.push(`<div class="doc-title">${esc(str(content.title))}</div>`);
+  if (content.subtitle) parts.push(`<div class="doc-subtitle">${esc(str(content.subtitle))}</div>`);
+  if (content.issue_label) parts.push(`<div class="doc-issue">${esc(str(content.issue_label))}</div>`);
+
+  if (content.lead) {
+    parts.push(`<div class="doc-lead">${esc(str(content.lead))}</div>`);
+  }
+
+  const stats = arr(content.stats);
+  if (stats.length) {
+    parts.push(`<div class="doc-stats">`);
+    stats.forEach(s => {
+      parts.push(`
+        <div class="doc-stat">
+          <div class="doc-stat-value">${esc(str(s && s.value))}</div>
+          <div class="doc-stat-label">${esc(str(s && s.label))}</div>
+        </div>`);
+    });
+    parts.push(`</div>`);
+  }
+
+  const sections = arr(content.sections);
+  sections.forEach((sec, i) => {
+    if (!sec) return;
+    parts.push(`<div class="doc-section">`);
+    parts.push(`<div class="doc-section-label">${String(i + 1).padStart(2, "0")} // ${esc(str(sec.label))}</div>`);
+    parts.push(`<h4>${esc(str(sec.title))}</h4>`);
+    arr(sec.paragraphs).forEach(p => parts.push(`<p>${esc(str(p))}</p>`));
+    if (sec.pull_quote) parts.push(`<div class="doc-quote">${esc(str(sec.pull_quote))}</div>`);
+    const bullets = arr(sec.bullets);
+    if (bullets.length) {
+      parts.push(`<ul>${bullets.map(b => `<li>${esc(str(b))}</li>`).join("")}</ul>`);
+    }
+    const relevantImages = arr(sec.relevant_images).filter(fname => imageUrlMap[fname]);
+    if (relevantImages.length) {
+      parts.push(`<div class="doc-section-images">`);
+      relevantImages.forEach(fname => {
+        parts.push(`
+          <figure class="doc-section-figure">
+            <img src="${imageUrlMap[fname]}" alt="${esc(fname)}">
+            <figcaption>${esc(fname)}</figcaption>
+          </figure>`);
+      });
+      parts.push(`</div>`);
+    }
+    parts.push(`</div>`);
+  });
+
+  const vuca = arr(content.vuca);
+  if (vuca.length) {
+    parts.push(`<div class="doc-vuca-heading">The VUCA Framework</div>`);
+    parts.push(`<div class="doc-vuca-grid">`);
+    vuca.forEach(v => {
+      if (!v) return;
+      const responses = arr(v.responses).map(r => `<li>${esc(str(r))}</li>`).join("");
+      parts.push(`
+        <div class="doc-vuca-block">
+          <div class="doc-vuca-letter">${esc(str(v.letter))}</div>
+          <div class="doc-vuca-word">${esc(str(v.word))}</div>
+          <div class="doc-vuca-sub">${esc(str(v.sub))}</div>
+          <div class="doc-vuca-reality"><strong>Today's Reality:</strong> ${esc(str(v.reality))}</div>
+          <span class="doc-vuca-response-label">Leadership Response: ${esc(str(v.response_title))}</span>
+          <ul>${responses}</ul>
+        </div>`);
+    });
+    parts.push(`</div>`);
+  }
+
+  const playbook = arr(content.playbook);
+  if (playbook.length) {
+    parts.push(`<div class="doc-playbook"><h4>Leadership Playbook</h4><div class="doc-playbook-grid">`);
+    playbook.forEach(m => {
+      if (!m) return;
+      parts.push(`
+        <div class="doc-playbook-card">
+          <div class="doc-playbook-label">${esc(str(m.label))}</div>
+          <div class="doc-playbook-title">${esc(str(m.title))}</div>
+          <div class="doc-playbook-desc">${esc(str(m.description))}</div>
+        </div>`);
+    });
+    parts.push(`</div></div>`);
+  }
+
+  const closing = (content.closing && typeof content.closing === "object") ? content.closing : {};
+  if (closing.left_title || closing.right_title) {
+    parts.push(`
+      <div class="doc-closing">
+        <div class="doc-closing-cell dark">
+          <h5>${esc(str(closing.left_title))}</h5>
+          <p>${esc(str(closing.left_text))}</p>
+        </div>
+        <div class="doc-closing-cell light">
+          <h5>${esc(str(closing.right_title))}</h5>
+          <p>${esc(str(closing.right_text))}</p>
+        </div>
+      </div>`);
+  }
+
+  if (content.footer_source_note) {
+    parts.push(`<div class="doc-footer-note">${esc(str(content.footer_source_note))}</div>`);
+  }
+
+  el.innerHTML = parts.join("");
+}
+</script>
+
+</body>
+
+</html>
