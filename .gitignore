@@ -1,0 +1,20 @@
+# Secrets — never commit your real API key
+backend/.env
+.env
+
+# Python
+__pycache__/
+*.pyc
+venv/
+env/
+*.egg-info/
+
+# Generated output (recreated at runtime, not source)
+backend/outputs/*
+!backend/outputs/.gitkeep
+backend/uploads_tmp/*
+!backend/uploads_tmp/.gitkeep
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db
