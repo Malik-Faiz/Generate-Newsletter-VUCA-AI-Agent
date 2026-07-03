@@ -806,6 +806,11 @@ async function generate() {
       break; // got a real result
     }
 
+    // Generation succeeded — hide the progress card before showing the
+    // result (it was only being hidden on the error path before, which
+    // left the spinner stuck on-screen forever after a successful run).
+    document.getElementById("progressCard").classList.remove("visible");
+
     // Show the result card and wire up downloads FIRST, before attempting
     // to render the detailed preview — this way, even if something about
     // the preview rendering breaks, the Word document (which was already
