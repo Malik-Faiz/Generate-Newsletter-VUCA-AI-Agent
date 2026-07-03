@@ -4,6 +4,10 @@ app.py
 Flask backend for the public VUCA Newsletter Generator.
 
 Endpoints:
+  GET  /           — serves the upload page (frontend/index.html) directly,
+                      so the whole app lives at one URL. GitHub Pages is
+                      optional now — this exists for the simpler
+                      single-deployment setup.
   GET  /health     — server / API-key / skill status, used by the frontend's
                       status dot.
   POST /generate    — accepts multipart form data (report file, image files,
@@ -17,8 +21,8 @@ Endpoints:
 Run locally:
     (put GROQ_API_KEY in backend/.env)
     python app.py
-Then open frontend/index.html (or serve it) with the Server URL field
-pointed at http://localhost:7755 (or wherever this is deployed).
+Then just open http://localhost:7755/ in a browser — the frontend is
+served directly from the backend now.
 """
 
 import os
@@ -40,6 +44,7 @@ import docx_builder
 import infographic_builder
 
 BASE_DIR = Path(__file__).parent
+FRONTEND_DIR = BASE_DIR.parent / "frontend"
 OUTPUTS_DIR = BASE_DIR / "outputs"
 UPLOADS_TMP_DIR = BASE_DIR / "uploads_tmp"
 OUTPUTS_DIR.mkdir(exist_ok=True)
@@ -49,7 +54,19 @@ MAX_CONTENT_LENGTH = 60 * 1024 * 1024  # 60 MB total upload cap
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
-CORS(app)  # public frontend may be served from a different origin/domain
+CORS(app)  # in case the frontend is ever served from a different origin
+
+
+@app.route("/", methods=["GET"])
+def serve_frontend():
+    """
+    Serves the upload page directly at the backend's own root URL, so the
+    whole app lives at one single link (e.g. https://your-app.onrender.com/)
+    instead of needing a separate GitHub Pages deployment. Because this is
+    same-origin, the frontend's PRODUCTION_BACKEND_URL doesn't even need to
+    be set — its same-origin auto-detection just works.
+    """
+    return send_from_directory(FRONTEND_DIR, "index.html")
 
 
 @app.route("/health", methods=["GET"])
