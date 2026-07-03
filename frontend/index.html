@@ -721,6 +721,30 @@ function stopProgressCycle() {
   clearInterval(progressInterval);
 }
 
+// ── Queue wait countdown ─────────────────────────────────────────────
+// Only one generation can run at a time across everyone using this app
+// (Groq's free tier shares one small rate-limit budget). If someone
+// else generated very recently, the backend says how many seconds until
+// the next slot opens — this shows a live countdown during that wait,
+// then the caller retries automatically.
+const MAX_QUEUE_WAIT_SECONDS = 300; // give up after ~5 minutes of retrying
+
+function waitWithCountdown(seconds, label) {
+  const sub = document.getElementById("progressSub");
+  let remaining = Math.ceil(seconds);
+  return new Promise(resolve => {
+    const tick = () => {
+      sub.textContent = remaining > 0
+        ? `${label} — your turn in ${remaining}s…`
+        : `${label} — starting now…`;
+      if (remaining <= 0) { resolve(); return; }
+      remaining -= 1;
+      setTimeout(tick, 1000);
+    };
+    tick();
+  });
+}
+
 // ── Generate ──────────────────────────────────────────────────────────
 async function generate() {
   hideAll();
@@ -741,23 +765,46 @@ async function generate() {
   document.getElementById("generateIcon").textContent = "⏳";
 
   document.getElementById("progressCard").classList.add("visible");
-  startProgressCycle();
-
   setStep(3);
 
+  let totalWaited = 0;
+
   try {
-    const res = await fetch(serverBaseUrl() + "/generate", {
-      method: "POST",
-      body: fd,
-    });
-    const data = await res.json();
+    let res, data;
 
-    if (!res.ok) {
-      throw new Error(data.detail || `Server error ${res.status}`);
+    // Retry loop: each iteration is one real attempt at /generate. If the
+    // backend says another generation started too recently (429 + busy),
+    // this waits out the countdown it gives us, then tries again — so
+    // from the person's point of view, they just see a queue message and
+    // then their newsletter, with no manual "click generate again" needed.
+    while (true) {
+      startProgressCycle();
+      try {
+        res = await fetch(serverBaseUrl() + "/generate", { method: "POST", body: fd });
+        data = await res.json();
+      } finally {
+        stopProgressCycle();
+      }
+
+      if (res.status === 429 && data.busy) {
+        if (totalWaited >= MAX_QUEUE_WAIT_SECONDS) {
+          throw new Error(
+            "Still busy after several minutes of retrying — the server may be " +
+            "under heavier load than usual. Please try again in a little while."
+          );
+        }
+        const waitSecs = Math.min(Math.max(data.wait_seconds || 10, 1), 90);
+        totalWaited += waitSecs;
+        await waitWithCountdown(waitSecs, "Someone else is generating a newsletter right now");
+        continue;
+      }
+
+      if (!res.ok) {
+        throw new Error(data.detail || `Server error ${res.status}`);
+      }
+
+      break; // got a real result
     }
-
-    stopProgressCycle();
-    document.getElementById("progressCard").classList.remove("visible");
 
     // Show the result card and wire up downloads FIRST, before attempting
     // to render the detailed preview — this way, even if something about
