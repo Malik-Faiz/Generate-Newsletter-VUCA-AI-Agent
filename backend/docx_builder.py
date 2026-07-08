@@ -56,13 +56,24 @@ def _heading(doc: DocxWriter, text, level=1, color=None):
     )
 
 
-def _insert_image(doc: DocxWriter, image_bytes, caption, max_w_in=6.0):
+def _insert_image(doc: DocxWriter, image_bytes, caption, max_w_in=6.0, max_pixel_dim=1400):
     try:
         img = Image.open(io.BytesIO(image_bytes))
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
+        # Cap resolution before embedding — a docx only ever displays this
+        # at up to max_w_in inches wide (~6in ≈ 900px at 150 DPI, generous
+        # for print), so embedding a much larger original just bloats the
+        # file and server memory for no visual benefit. This matters a lot
+        # once several images are embedded in one document.
+        if max(img.size) > max_pixel_dim:
+            scale = max_pixel_dim / max(img.size)
+            img = img.resize(
+                (max(1, int(img.size[0] * scale)), max(1, int(img.size[1] * scale))),
+                Image.LANCZOS,
+            )
         buf = io.BytesIO()
-        img.save(buf, format="PNG")
+        img.save(buf, format="PNG", optimize=True)
         png_bytes = buf.getvalue()
         w_in = min(img.size[0] / 96, max_w_in)
         h_in = w_in * (img.size[1] / img.size[0]) if img.size[0] else w_in * 0.6
