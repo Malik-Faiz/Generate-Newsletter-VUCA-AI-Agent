@@ -1,30 +1,42 @@
 """
 image_vision.py
 ─────────────────
-Uses Groq's vision-capable model (Llama 4 Scout) to actually look at
-each uploaded image and describe what's in it. Those descriptions then
-get fed into the main newsletter-writing prompt so the AI can assign
-each image to the section it's actually relevant to, instead of just
-scattering images round-robin by filename.
+Uses Groq's vision-capable model to actually look at each uploaded
+image and describe what's in it. Those descriptions then get fed into
+the main newsletter-writing prompt so the AI can assign each image to
+the section it's actually relevant to, instead of just scattering
+images round-robin by filename.
 
 Groq's vision endpoint accepts up to 5 images per request, so images
-are batched in groups of 5 to minimise API calls.
+are batched in groups of 5 to minimise API calls. Each batch is
+independent — if one batch fails (rate limit, timeout, bad response),
+the rest still get processed instead of the whole upload silently
+losing its descriptions.
 """
 
 import base64
+import io
 import json
 import os
 import urllib.error
 import urllib.request
 
+from PIL import Image
+
 GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
-# NOTE: Groq deprecated meta-llama/llama-4-scout-17b-16e-instruct on
-# June 17, 2026. qwen/qwen3.6-27b is the current vision-capable model
-# on Groq's free/preview tier as of this writing — check
-# https://console.groq.com/docs/vision for the current lineup, since
-# Groq's multimodal model availability changes frequently.
+# NOTE: Groq deprecates/replaces vision models on a regular cadence —
+# check https://console.groq.com/docs/vision for the current lineup
+# before assuming this value is still right.
 VISION_MODEL = os.environ.get("GROQ_VISION_MODEL", "qwen/qwen3.6-27b")
 MAX_IMAGES_PER_CALL = 5
+
+# Images get downsized before being sent to the vision model — this
+# matters a lot once someone uploads 10+ images (e.g. a multi-page PDF
+# slide deck): full-resolution PNGs multiply up fast in both request
+# payload size and server memory, and a vision model doesn't need
+# print-resolution input to describe what's in a slide.
+MAX_VISION_DIMENSION = int(os.environ.get("MAX_VISION_DIMENSION", "900"))
+VISION_JPEG_QUALITY = int(os.environ.get("VISION_JPEG_QUALITY", "70"))
 
 
 def _require_api_key() -> str:
@@ -32,6 +44,30 @@ def _require_api_key() -> str:
     if not api_key:
         raise RuntimeError("GROQ_API_KEY is not set.")
     return api_key
+
+
+def _downsize_for_vision(image_bytes: bytes) -> bytes:
+    """
+    Shrinks an image to a reasonable max dimension and re-encodes as a
+    moderate-quality JPEG before sending to the vision model. This is
+    purely for the vision API call — the original, full-quality bytes
+    are still what gets embedded in the Word document.
+    """
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        w, h = img.size
+        if max(w, h) > MAX_VISION_DIMENSION:
+            scale = MAX_VISION_DIMENSION / max(w, h)
+            img = img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=VISION_JPEG_QUALITY)
+        return buf.getvalue()
+    except Exception:
+        # If anything about downsizing fails, fall back to the original
+        # bytes rather than losing the image from the vision pass.
+        return image_bytes
 
 
 def _mime_for(image_bytes: bytes) -> str:
@@ -56,7 +92,7 @@ def _describe_batch(images_batch: list) -> list:
             "type": "text",
             "text": (
                 f"You will see {len(images_batch)} image(s), in order. For "
-                "each one, write a single concise sentence (max 20 words) "
+                "each one, write a single concise sentence (max 15 words) "
                 "describing what it actually shows — the kind of visual "
                 "content, key subject matter, any visible text/numbers/"
                 "chart type. Respond with ONLY a JSON object of this exact "
@@ -67,8 +103,9 @@ def _describe_batch(images_batch: list) -> list:
         }
     ]
     for img in images_batch:
-        b64 = base64.b64encode(img["bytes"]).decode("ascii")
-        mime = _mime_for(img["bytes"])
+        vision_bytes = _downsize_for_vision(img["bytes"])
+        b64 = base64.b64encode(vision_bytes).decode("ascii")
+        mime = _mime_for(vision_bytes)
         content.append(
             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
         )
@@ -118,23 +155,29 @@ def describe_images(images: list) -> list:
     """
     images: list of {'filename':..., 'bytes':..., 'caption':...}
     Returns the same list with each dict's 'caption' replaced by a real
-    AI-generated description of the image content. If the vision call
-    fails for any reason (rate limit, network, no key), falls back to
-    the filename as the caption so the rest of the pipeline still works
-    — this is a nice-to-have, not a hard dependency.
+    AI-generated description of the image content.
+
+    Each batch of up to 5 images is independent: if one batch's API
+    call fails (rate limit, timeout, malformed response), that batch's
+    images just keep their filename as a fallback caption and the
+    REMAINING batches still get processed normally. Previously a single
+    failed batch aborted every batch after it, which is why uploading
+    several images sometimes silently lost descriptions partway through
+    — that's the specific bug this fixes.
     """
     if not images:
         return images
 
-    try:
-        for i in range(0, len(images), MAX_IMAGES_PER_CALL):
-            batch = images[i : i + MAX_IMAGES_PER_CALL]
+    for i in range(0, len(images), MAX_IMAGES_PER_CALL):
+        batch = images[i : i + MAX_IMAGES_PER_CALL]
+        try:
             descriptions = _describe_batch(batch)
             for img, desc in zip(batch, descriptions):
                 img["caption"] = desc.strip() or img["filename"]
-        return images
-    except Exception:
-        # Vision is best-effort. On any failure, leave filenames as
-        # captions (already the default) and let the rest of the
-        # pipeline proceed with round-robin-style placement instead.
-        return images
+        except Exception:
+            # This batch is best-effort — leave its filenames as
+            # captions (already the default) and move on to the next
+            # batch rather than abandoning everything after it.
+            continue
+
+    return images
