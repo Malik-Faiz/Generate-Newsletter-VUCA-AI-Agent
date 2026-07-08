@@ -798,7 +798,21 @@ async function generate() {
       startProgressCycle();
       try {
         res = await fetch(serverBaseUrl() + "/generate", { method: "POST", body: fd });
-        data = await res.json();
+        try {
+          data = await res.json();
+        } catch (parseErr) {
+          // The server closed the connection without sending a full JSON
+          // body — most commonly the backend timing out mid-generation
+          // (a slow report + several images can genuinely take a while)
+          // or Render's free tier waking up from a cold start. Give a
+          // specific, actionable message instead of the raw browser error.
+          throw new Error(
+            "The server didn't finish responding in time (it may have been " +
+            "waking up from being idle, or the generation took unusually " +
+            "long). Please try again — if this keeps happening with the " +
+            "same report, try removing some images or shortening it."
+          );
+        }
       } finally {
         stopProgressCycle();
       }
