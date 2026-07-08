@@ -60,6 +60,14 @@ UPLOADS_TMP_DIR.mkdir(exist_ok=True)
 
 MAX_CONTENT_LENGTH = 60 * 1024 * 1024  # 60 MB total upload cap
 
+# Cap on total images processed per generation, counting each PDF page
+# as one image once expanded. This is a deliberate, predictable limit
+# rather than an implicit one — past this point, per-image vision calls,
+# prompt size, and docx build time all start compounding in ways that
+# risk timeouts or memory pressure on a free-tier deployment. Raise via
+# env var if you've moved off the free tier and have headroom to spare.
+MAX_IMAGES = int(os.environ.get("MAX_IMAGES", "12"))
+
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 CORS(app)  # in case the frontend is ever served from a different origin
@@ -200,6 +208,24 @@ def generate():
                 raw = f.read()
                 images.append({"filename": f.filename, "bytes": raw, "caption": f.filename})
 
+        if len(images) > MAX_IMAGES:
+            return (
+                jsonify(
+                    {
+                        "detail": (
+                            f"Too many images/slides for one generation ({len(images)} "
+                            f"— limit is {MAX_IMAGES}, counting each PDF page as one "
+                            "image). This limit exists because per-image AI calls, "
+                            "prompt size, and document-building time all compound "
+                            "with more images, risking timeouts on a free-tier "
+                            "deployment. Please remove some images (or split a large "
+                            "slide-deck PDF into two smaller ones) and try again."
+                        )
+                    }
+                ),
+                400,
+            )
+
         # ── Vision step: actually look at each image (best-effort — ──
         # falls back to filename-only captions if this fails for any
         # reason, so a vision hiccup never blocks the whole generation).
@@ -232,8 +258,14 @@ def generate():
         # Strip internal bookkeeping keys before sending content back —
         # the frontend renders this directly in-page (no separate HTML
         # file is generated; the Word doc above is the downloadable
-        # document version of the same content).
+        # document version of the same content). unassigned_images is
+        # kept (renamed, without the underscore prefix) specifically so
+        # the frontend can still show images the AI didn't confidently
+        # assign to a section — previously those were invisible in the
+        # on-page preview even though they were included in the Word doc,
+        # which looked like uploaded images had simply vanished.
         public_content = {k: v for k, v in content.items() if not k.startswith("_")}
+        public_content["unassigned_images"] = content.get("_unassigned_images", [])
 
         return jsonify(
             {
