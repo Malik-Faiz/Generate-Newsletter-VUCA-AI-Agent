@@ -18,7 +18,12 @@ import urllib.error
 import urllib.request
 
 GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
-VISION_MODEL = os.environ.get("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+# NOTE: Groq deprecated meta-llama/llama-4-scout-17b-16e-instruct on
+# June 17, 2026. qwen/qwen3.6-27b is the current vision-capable model
+# on Groq's free/preview tier as of this writing — check
+# https://console.groq.com/docs/vision for the current lineup, since
+# Groq's multimodal model availability changes frequently.
+VISION_MODEL = os.environ.get("GROQ_VISION_MODEL", "qwen/qwen3.6-27b")
 MAX_IMAGES_PER_CALL = 5
 
 
