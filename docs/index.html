@@ -130,6 +130,13 @@
       width: 80px; height: 80px; object-fit: cover; border-radius: 7px;
       border: 1px solid var(--border);
     }
+    .thumb-pdf {
+      width: 80px; height: 80px; border-radius: 7px;
+      border: 1px solid var(--border); background: var(--light);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 4px; font-size: 1.6rem; color: var(--blue);
+    }
+    .thumb-pdf span { font-size: 0.62rem; font-weight: 700; color: var(--navy); text-transform: uppercase; }
     .thumb-remove {
       position: absolute; top: -6px; right: -6px;
       background: var(--red); color: var(--white); border: none;
@@ -429,13 +436,13 @@
   <div class="card">
     <div class="card-title">
       <div class="card-title-icon">🖼️</div>
-      Slide Images <span style="color:var(--gray);font-weight:400;font-size:0.85rem;margin-left:6px;">(optional — PNG, JPG)</span>
+      Slide Images <span style="color:var(--gray);font-weight:400;font-size:0.85rem;margin-left:6px;">(optional — PNG, JPG, or a PDF slide deck)</span>
     </div>
     <div class="drop-zone" id="imageZone">
-      <input type="file" id="imageFiles" accept="image/png,image/jpeg,image/jpg,image/webp" multiple="" onchange="handleImageFiles(this)">
+      <input type="file" id="imageFiles" accept="image/png,image/jpeg,image/jpg,image/webp,application/pdf" multiple="" onchange="handleImageFiles(this)">
       <div class="drop-icon">🖼️</div>
-      <div class="drop-title">Drop slide images here or <span class="drop-link">browse</span></div>
-      <div class="drop-sub">From exported PPTX slides or any source imagery — multiple files accepted</div>
+      <div class="drop-title">Drop slide images or a slide-deck PDF here, or <span class="drop-link">browse</span></div>
+      <div class="drop-sub">Export your PowerPoint/Slides deck to PDF and drop it here — each page becomes its own image automatically</div>
     </div>
     <div class="thumb-grid" id="thumbGrid"></div>
   </div>
@@ -652,12 +659,22 @@ function renderThumbs() {
   const grid = document.getElementById("thumbGrid");
   grid.innerHTML = "";
   imageFileObjs.forEach((f, i) => {
-    const url = URL.createObjectURL(f);
     const wrap = document.createElement("div");
     wrap.className = "thumb-wrap";
-    wrap.innerHTML = `
-      <img src="${url}" alt="${esc(f.name)}" title="${esc(f.name)}" />
-      <button class="thumb-remove" onclick="removeImage(${i})">×</button>`;
+    const isPdf = f.name.toLowerCase().endsWith(".pdf");
+    if (isPdf) {
+      // Browsers can't render a PDF's bytes in an <img> tag — show a
+      // clear placeholder instead, since this will be split into
+      // multiple per-page images server-side.
+      wrap.innerHTML = `
+        <div class="thumb-pdf" title="${esc(f.name)}">📑<span>PDF deck</span></div>
+        <button class="thumb-remove" onclick="removeImage(${i})">×</button>`;
+    } else {
+      const url = URL.createObjectURL(f);
+      wrap.innerHTML = `
+        <img src="${url}" alt="${esc(f.name)}" title="${esc(f.name)}" />
+        <button class="thumb-remove" onclick="removeImage(${i})">×</button>`;
+    }
     grid.appendChild(wrap);
   });
 }
