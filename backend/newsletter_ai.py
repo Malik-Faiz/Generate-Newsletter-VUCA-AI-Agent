@@ -207,8 +207,16 @@ def build_user_prompt(
     ]
 
     if image_descriptions:
+        # Cap each description's length in the prompt itself — with 10+
+        # images this adds up fast, and the vision step already targets
+        # short (max 15 word) descriptions, so this is just a hard safety
+        # ceiling in case a description comes back longer than asked for.
+        def _short(caption, max_chars=90):
+            caption = (caption or "").strip()
+            return caption if len(caption) <= max_chars else caption[:max_chars].rstrip() + "…"
+
         lines = "\n".join(
-            f'- filename: "{img["filename"]}" — shows: {img.get("caption", "")}'
+            f'- filename: "{img["filename"]}" — shows: {_short(img.get("caption", ""))}'
             for img in image_descriptions
         )
         parts.append(
@@ -408,4 +416,3 @@ def generate_newsletter_content(
     content["_accent_hex"] = TOPIC_ACCENTS.get(topic_key, TOPIC_ACCENTS["strategy"])["accent"]
 
     return content
-
