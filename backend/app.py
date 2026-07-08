@@ -178,12 +178,27 @@ def generate():
                 tmp_report_path.unlink(missing_ok=True)
 
         # ── Save images, keep bytes for DOCX embedding ───────────────
+        # A .pdf here is treated as an exported slide deck (PowerPoint /
+        # Google Slides / Keynote all export to PDF in one click) — each
+        # page becomes its own image, so "1 slide = 1 image" without
+        # needing LibreOffice or any pptx-rendering dependency.
         images = []
         for f in request.files.getlist("images"):
             if not f or not f.filename:
                 continue
-            raw = f.read()
-            images.append({"filename": f.filename, "bytes": raw, "caption": f.filename})
+            if f.filename.lower().endswith(".pdf"):
+                tmp_pdf_path = UPLOADS_TMP_DIR / f"{job_id}_{f.filename}"
+                f.save(tmp_pdf_path)
+                try:
+                    clean_stem = Path(f.filename).stem
+                    pages = report_reader.extract_pdf_pages_as_images(tmp_pdf_path, base_name=clean_stem)
+                    for page in pages:
+                        images.append({**page, "caption": page["filename"]})
+                finally:
+                    tmp_pdf_path.unlink(missing_ok=True)
+            else:
+                raw = f.read()
+                images.append({"filename": f.filename, "bytes": raw, "caption": f.filename})
 
         # ── Vision step: actually look at each image (best-effort — ──
         # falls back to filename-only captions if this fails for any
