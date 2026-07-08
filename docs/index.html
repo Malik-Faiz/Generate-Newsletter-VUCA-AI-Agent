@@ -137,6 +137,11 @@
       gap: 4px; font-size: 1.6rem; color: var(--blue);
     }
     .thumb-pdf span { font-size: 0.62rem; font-weight: 700; color: var(--navy); text-transform: uppercase; }
+    .image-limit-warning {
+      margin-top: 10px; padding: 10px 14px; border-radius: 7px;
+      background: #FDECEA; border: 1px solid #F5B8B3; color: #7B241C;
+      font-size: 0.80rem;
+    }
     .thumb-remove {
       position: absolute; top: -6px; right: -6px;
       background: var(--red); color: var(--white); border: none;
@@ -442,9 +447,10 @@
       <input type="file" id="imageFiles" accept="image/png,image/jpeg,image/jpg,image/webp,application/pdf" multiple="" onchange="handleImageFiles(this)">
       <div class="drop-icon">🖼️</div>
       <div class="drop-title">Drop slide images or a slide-deck PDF here, or <span class="drop-link">browse</span></div>
-      <div class="drop-sub">Export your PowerPoint/Slides deck to PDF and drop it here — each page becomes its own image automatically</div>
+      <div class="drop-sub">Export your PowerPoint/Slides deck to PDF and drop it here — each page becomes its own image automatically (up to 12 images/slides total)</div>
     </div>
     <div class="thumb-grid" id="thumbGrid"></div>
+    <div class="image-limit-warning" id="imageLimitWarning" style="display:none;"></div>
   </div>
 
   <!-- ── STEP 3: Options ───────────────────────────────────────────── -->
@@ -677,6 +683,22 @@ function renderThumbs() {
     }
     grid.appendChild(wrap);
   });
+
+  // Heads-up only — this counts uploaded FILES, not the final image
+  // count after a PDF gets split into per-page images server-side.
+  // The server enforces the real 12-image cap and will reject with a
+  // specific message if a PDF's page count pushes the total over.
+  const warning = document.getElementById("imageLimitWarning");
+  const hasPdf = imageFileObjs.some(f => f.name.toLowerCase().endsWith(".pdf"));
+  if (imageFileObjs.length > 12) {
+    warning.style.display = "block";
+    warning.textContent = `You've selected ${imageFileObjs.length} files — the limit is 12 total images/slides. Please remove some before generating.`;
+  } else if (hasPdf && imageFileObjs.length >= 1) {
+    warning.style.display = "block";
+    warning.textContent = `Heads up: a PDF slide deck expands into one image per page. If your deck has many slides, the total could exceed the 12-image limit — you'll get a clear message if so.`;
+  } else {
+    warning.style.display = "none";
+  }
 }
 function removeImage(idx) {
   imageFileObjs.splice(idx, 1);
@@ -1054,6 +1076,23 @@ function renderDocPreview(content, imageUrlMap) {
           <p>${esc(str(closing.right_text))}</p>
         </div>
       </div>`);
+  }
+
+  const unassignedImages = arr(content.unassigned_images).filter(fname => imageUrlMap[fname]);
+  if (unassignedImages.length) {
+    parts.push(`<div class="doc-section">`);
+    parts.push(`<div class="doc-section-label">ADDITIONAL IMAGES</div>`);
+    parts.push(`<h4>Also Included</h4>`);
+    parts.push(`<p style="font-size:0.85rem;color:#5C6B7A;">These images were uploaded but not tied to a specific section — they're still included at the end of the Word document.</p>`);
+    parts.push(`<div class="doc-section-images">`);
+    unassignedImages.forEach(fname => {
+      parts.push(`
+        <figure class="doc-section-figure">
+          <img src="${imageUrlMap[fname]}" alt="${esc(fname)}">
+          <figcaption>${esc(fname)}</figcaption>
+        </figure>`);
+    });
+    parts.push(`</div></div>`);
   }
 
   if (content.footer_source_note) {
