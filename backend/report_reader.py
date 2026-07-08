@@ -36,6 +36,37 @@ def extract_text(path: Path) -> str:
     raise ValueError(f"Unsupported report file type: {ext}")
 
 
+def extract_pdf_pages_as_images(path: Path, zoom: float = 1.8, base_name: str = None) -> list:
+    """
+    Renders each page of a PDF to a PNG image — used when someone uploads
+    a PDF export of their slide deck (PowerPoint/Google Slides/Keynote all
+    export to PDF in one click) so that "1 slide = 1 image" without
+    needing LibreOffice or any pptx-rendering dependency on the server.
+
+    Returns a list of {"filename": ..., "bytes": ...} dicts, one per page,
+    in page order — ready to be merged into the same `images` list used
+    for directly-uploaded image files.
+
+    `zoom` controls render resolution (1.8 ≈ 130 DPI — a good balance of
+    legibility for the vision model vs. upload/base64 size; Groq's vision
+    endpoint caps requests at 20MB per image).
+
+    `base_name` overrides the filename stem used to name each page (pass
+    the original uploaded filename's stem here — the caller's on-disk
+    temp path often has an internal prefix that shouldn't leak into
+    user-visible filenames).
+    """
+    pages = []
+    with fitz.open(str(path)) as doc:
+        name = base_name if base_name is not None else path.stem
+        matrix = fitz.Matrix(zoom, zoom)
+        for i, page in enumerate(doc):
+            pix = page.get_pixmap(matrix=matrix)
+            png_bytes = pix.tobytes("png")
+            pages.append({"filename": f"{name}-slide{i + 1}.png", "bytes": png_bytes})
+    return pages
+
+
 def _extract_pdf(path: Path) -> str:
     text_parts = []
     with fitz.open(str(path)) as doc:
