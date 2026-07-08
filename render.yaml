@@ -5,18 +5,30 @@ services:
     plan: free
     rootDir: backend
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    # --timeout 150: gunicorn kills a worker mid-request if it runs past
+    # this many seconds — the default (30s) is too short for this app's
+    # real pipeline (vision calls + content generation + a possible
+    # automatic retry + Word/infographic building can all add up).
+    # A killed worker sends the browser a connection reset instead of a
+    # response, which shows up client-side as "Unexpected end of JSON
+    # input" — that's this timeout being hit, not a data problem.
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 150
     healthCheckPath: /health
     envVars:
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_MODEL
         value: openai/gpt-oss-120b
+      # Groq deprecates/replaces vision models on a regular cadence —
+      # check https://console.groq.com/docs/vision for the current one
+      # before assuming this value is still right.
       - key: GROQ_VISION_MODEL
-        value: meta-llama/llama-4-scout-17b-16e-instruct
+        value: qwen/qwen3.6-27b
       - key: MAX_SKILL_CHARS
         value: "1500"
       - key: MAX_REPORT_CHARS
         value: "1800"
       - key: MAX_OUTPUT_TOKENS
         value: "5500"
+      - key: MIN_GENERATION_INTERVAL_SECONDS
+        value: "62"
