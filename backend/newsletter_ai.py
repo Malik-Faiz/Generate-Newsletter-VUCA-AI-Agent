@@ -1,29 +1,35 @@
 """
 newsletter_ai.py
 ─────────────────
-Talks to Groq (free tier, OpenAI-compatible, runs open-source models on
-Groq's LPU hardware) to turn raw source material (report text + real
-AI-generated image descriptions) into a fully-structured VUCA Leadership
-newsletter, returned as JSON. This structured JSON is then handed to
-docx_builder and infographic_builder to produce the downloadable files,
-and rendered directly in the frontend for the on-page preview.
+Talks to the Google Gemini API to turn raw source material — report text
+plus uploaded images — into a fully-structured VUCA Leadership newsletter,
+returned as JSON. This structured JSON is then handed to docx_builder and
+infographic_builder to produce the downloadable files, and rendered
+directly in the frontend for the on-page preview.
+
+Gemini has native multimodal input, so uploaded images are sent as real
+inline image data in the SAME request that writes the newsletter — no
+separate "vision pass" needed. The model sees the real pixels when
+deciding which image belongs with which section.
 
 The system prompt is derived from the "VUCA Leadership Newsletter
 Generator" agent skill (skill.md in this folder) — the same instructions
 that used to be followed manually inside a local Claude session are now
 sent to the API directly.
 
-NOTE ON GROQ'S FREE TIER: rate limits are tight and vary by model —
-openai/gpt-oss-120b (the current default; Groq deprecated
-llama-3.3-70b-versatile in June 2026) gets roughly 30 requests/min,
-~8,000 tokens/min, ~1,000 requests/day as of mid-2026 — check
-https://console.groq.com/docs/rate-limits for current numbers. To stay
-comfortably inside the per-minute token budget, this module sends a
-condensed version of skill.md (code samples stripped out, since they're
-irrelevant to JSON content generation) and truncates the uploaded report
-more aggressively than a paid-API setup would need to.
+NOTE ON COST: this uses Google AI Studio's free tier — genuinely free,
+no credit card, no expiration. The real constraint is rate limits, not
+tokens: roughly 10-15 requests/minute and 250-1,500 requests/day
+depending on the model (check https://ai.google.dev/gemini-api/docs/rate-limits
+for your project's actual current limits — Google has changed these
+more than once). Since one generation is now just ONE API call (no
+separate vision request), the rate gate in app.py only needs to keep
+requests a few seconds apart, not the much longer wait Groq's shared
+token budget used to require.
 """
 
+import base64
+import io
 import json
 import os
 import re
@@ -31,18 +37,26 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
+from PIL import Image
+
+GEMINI_ENDPOINT_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 SKILL_PATH = Path(__file__).parent / "skill.md"
-# llama-3.3-70b-versatile was deprecated by Groq on June 17, 2026.
-# openai/gpt-oss-120b is Groq's official recommended replacement — it
-# supports the same json_object structured-output mode used here.
-MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
+MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
-# Keep the system + user prompt comfortably under Groq free-tier TPM caps.
-MAX_SKILL_CHARS = int(os.environ.get("MAX_SKILL_CHARS", "1500"))
-MAX_REPORT_CHARS = int(os.environ.get("MAX_REPORT_CHARS", "1800"))
-MAX_OUTPUT_TOKENS = int(os.environ.get("MAX_OUTPUT_TOKENS", "5500"))
+# Gemini's 1M-token context window makes these generous defaults rather
+# than tight survival constraints — raise them freely if you want longer
+# newsletters or want more of a long report sent verbatim. The binding
+# constraint on the free tier is requests-per-minute, not tokens.
+MAX_SKILL_CHARS = int(os.environ.get("MAX_SKILL_CHARS", "20000"))       # skill.md is ~23KB raw; this comfortably fits the whole thing
+MAX_REPORT_CHARS = int(os.environ.get("MAX_REPORT_CHARS", "30000"))     # roughly 15-20 pages of report text
+MAX_OUTPUT_TOKENS = int(os.environ.get("MAX_OUTPUT_TOKENS", "8000"))    # ~3,000-3,500 words of newsletter content
+
+# Images are downsized before being sent — this controls request payload
+# size and keeps things fast; Gemini doesn't need print-resolution input
+# to understand what's in a slide or chart.
+MAX_IMAGE_DIMENSION = int(os.environ.get("MAX_IMAGE_DIMENSION", "1200"))
+IMAGE_JPEG_QUALITY = int(os.environ.get("IMAGE_JPEG_QUALITY", "80"))
 
 TOPIC_LABELS = {
     "energy": "Energy & Oil Markets",
@@ -68,10 +82,10 @@ _CODE_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 
 def _condensed_skill_text() -> str:
     """
-    Strips fenced code blocks (HTML/CSS/JS templates meant for a different
-    pipeline) out of skill.md, keeping the prose instructions — this is
-    what actually matters for writing the JSON content — then truncates
-    to MAX_SKILL_CHARS to fit Groq's free-tier token budget.
+    Strips fenced code blocks (HTML/CSS/JS templates meant for a
+    different, earlier pipeline) out of skill.md, keeping the prose
+    instructions — with Gemini's large context window this is mostly a
+    courtesy trim rather than a survival necessity.
     """
     if not SKILL_PATH.exists():
         return ""
@@ -79,22 +93,22 @@ def _condensed_skill_text() -> str:
     stripped = _CODE_FENCE_RE.sub("", raw)
     stripped = re.sub(r"\n{3,}", "\n\n", stripped).strip()
     if len(stripped) > MAX_SKILL_CHARS:
-        stripped = stripped[:MAX_SKILL_CHARS] + "\n\n[...skill excerpt truncated for token budget...]"
+        stripped = stripped[:MAX_SKILL_CHARS] + "\n\n[...skill excerpt truncated...]"
     return stripped
 
 
 def _require_api_key() -> str:
-    api_key = os.environ.get("GROQ_API_KEY")
+    api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError(
-            "GROQ_API_KEY is not set. Export it before starting the server. "
-            "Get a free key at https://console.groq.com/keys"
+            "GEMINI_API_KEY is not set. Get a free key (no credit card) at "
+            "https://aistudio.google.com/apikey"
         )
     return api_key
 
 
 def api_key_set() -> bool:
-    return bool(os.environ.get("GROQ_API_KEY"))
+    return bool(os.environ.get("GEMINI_API_KEY"))
 
 
 def skill_loaded() -> bool:
@@ -111,43 +125,43 @@ exactly:
   "subtitle": "string — one-line strapline under the title",
   "issue_label": "string, e.g. 'VUCA Leadership Intelligence — March 2026'",
   "accent_name": "one of: red, amber, sage, steel",
-  "lead": "string — 4-6 substantive sentences setting the stakes, serif voice",
-  "ticker_items": ["short punchy fact strings, 4-6 items"],
+  "lead": "string — 5-7 substantive sentences setting the stakes, serif voice",
+  "ticker_items": ["short punchy fact strings, 4-8 items"],
   "stats": [
     {"value": "string, e.g. '4.5T' or '38%'", "label": "short caption"}
-    // 4 to 5 items
+    // 4 to 6 items
   ],
   "sections": [
     {
       "label": "monospace section tag, e.g. 'MARKET SIGNALS'",
       "title": "section heading",
-      "paragraphs": ["3 to 4 substantive paragraphs of real analysis — each paragraph 4-6 sentences"],
-      "bullets": ["2-4 concrete supporting points"],
+      "paragraphs": ["3 to 5 substantive paragraphs of real analysis — each paragraph 4-6 sentences"],
+      "bullets": ["3-5 concrete supporting points"],
       "pull_quote": "optional short standout quote string or null",
-      "relevant_images": ["filenames of any uploaded images that genuinely relate to this section's topic — omit or leave empty if none apply; see the UPLOADED IMAGES list for what each one shows"]
+      "relevant_images": ["filenames of any uploaded images that genuinely relate to this section's topic — you were shown the actual images, so judge this from what they actually depict, not just their filename; omit or leave empty if none apply"]
     }
-    // 5 sections total — this is the bulk of the newsletter,
+    // 6 to 7 sections total — this is the bulk of the newsletter,
     // treat each like a real article, not a summary blurb
   ],
   "vuca": [
     {
       "letter": "V", "word": "Volatility",
       "sub": "short definition phrase",
-      "reality": "2 sentences, grounded in the source, with specifics",
+      "reality": "2-3 sentences, grounded in the source, with specifics",
       "response_title": "short framework name",
-      "responses": ["3-4 concrete, actionable leadership responses"]
+      "responses": ["4-5 concrete, actionable leadership responses"]
     },
     { "letter": "U", "word": "Uncertainty", ... },
     { "letter": "C", "word": "Complexity", ... },
     { "letter": "A", "word": "Ambiguity", ... }
   ],
   "playbook": [
-    {"label": "01", "title": "short move title", "description": "1-2 sentences of real detail"}
-    // 3 to 4 items
+    {"label": "01", "title": "short move title", "description": "2-3 sentences of real detail"}
+    // 4 to 6 items
   ],
   "closing": {
-    "left_title": "string", "left_text": "1-2 sentences",
-    "right_title": "string", "right_text": "1-2 sentences"
+    "left_title": "string", "left_text": "2-3 sentences",
+    "right_title": "string", "right_text": "2-3 sentences"
   },
   "footer_source_note": "one sentence describing sourcing / methodology"
 }
@@ -158,17 +172,16 @@ the output. If the source material is thin, use well-reasoned analysis
 to fill gaps sensibly, but keep it grounded and avoid inventing
 statistics that were not implied by the source.
 
-Aim for roughly 2,200-2,600 words of total prose across all fields
-combined — substantial and specific, not padded, but sized to fit
-comfortably within your output budget.
+Aim for roughly 3,000-3,500 words of total prose across all fields
+combined — genuinely substantial, publication-quality depth. Do not pad
+with filler; every sentence should add a fact, implication, or
+recommendation.
 
-CRITICAL: you have a hard output token limit. A complete, well-formed
-JSON object that hits the shorter end of the length guidance is far
-better than a longer one that runs out of room and gets cut off
-mid-object — an incomplete JSON response will be rejected entirely. If
-you sense you are running low on space, shorten remaining fields and
-make sure every brace and bracket is properly closed before you stop.
-Never sacrifice valid, complete JSON for extra length.
+If any images were included in this message, look at what they actually
+show and assign each one's filename to the section it genuinely
+illustrates via that section's "relevant_images" field. Never assign the
+same image filename to more than one section, and never invent a
+filename that wasn't actually provided.
 """
 
 
@@ -176,11 +189,10 @@ def build_system_prompt(language: str) -> str:
     skill_text = _condensed_skill_text()
     return (
         "You are the VUCA Leadership Newsletter agent. Use the following "
-        "condensed skill instructions to decide on content, structure, "
-        "and tone (code/template samples have been stripped out — a "
-        "separate fixed renderer handles all visual output, so focus "
-        "entirely on writing sharp, specific, well-organised editorial "
-        "content):\n\n"
+        "skill instructions to decide on content, structure, and tone "
+        "(code/template samples have been stripped out — a separate "
+        "fixed renderer handles all visual output, so focus entirely on "
+        "writing sharp, specific, well-organised editorial content):\n\n"
         f"{skill_text}\n\n"
         "---\n"
         f"Write the entire newsletter in {language}. All JSON keys stay in "
@@ -190,102 +202,138 @@ def build_system_prompt(language: str) -> str:
     )
 
 
-def build_user_prompt(
+def _mime_for(image_bytes: bytes) -> str:
+    if image_bytes[:2] == b"\xff\xd8":
+        return "image/jpeg"
+    if image_bytes[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if image_bytes[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/png"
+
+
+def _downsize_for_gemini(image_bytes: bytes) -> bytes:
+    """
+    Shrinks an image to MAX_IMAGE_DIMENSION before sending it to Gemini.
+    This only affects what's sent to the API — the original, full-quality
+    bytes are still what gets embedded in the Word document later.
+    """
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        if max(img.size) > MAX_IMAGE_DIMENSION:
+            scale = MAX_IMAGE_DIMENSION / max(img.size)
+            img = img.resize(
+                (max(1, int(img.size[0] * scale)), max(1, int(img.size[1] * scale))),
+                Image.LANCZOS,
+            )
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=IMAGE_JPEG_QUALITY)
+        return buf.getvalue()
+    except Exception:
+        return image_bytes
+
+
+def build_user_parts(
     topic_key: str,
     custom_topic: str,
     audience: str,
     tone: str,
     report_text: str,
-    image_descriptions: list[dict],
-) -> str:
+    images: list[dict],
+) -> list[dict]:
+    """
+    Returns a list of Gemini "parts" — a mix of text and inline_data
+    (image) parts. Images are preceded by a text part stating the
+    filename, so the model can both see the image and know which
+    filename to use if it assigns that image to a section.
+    """
     topic_label = TOPIC_LABELS.get(topic_key) or custom_topic or "General Intelligence Briefing"
 
-    parts = [
+    intro = [
         f"TOPIC TEMPLATE: {topic_label}",
         f"TARGET AUDIENCE: {audience}",
         f"TONE: {tone}",
     ]
 
-    if image_descriptions:
-        # Cap each description's length in the prompt itself — with 10+
-        # images this adds up fast, and the vision step already targets
-        # short (max 15 word) descriptions, so this is just a hard safety
-        # ceiling in case a description comes back longer than asked for.
-        def _short(caption, max_chars=90):
-            caption = (caption or "").strip()
-            return caption if len(caption) <= max_chars else caption[:max_chars].rstrip() + "…"
-
-        lines = "\n".join(
-            f'- filename: "{img["filename"]}" — shows: {_short(img.get("caption", ""))}'
-            for img in image_descriptions
-        )
-        parts.append(
-            "UPLOADED IMAGES (these have been analysed — each line tells "
-            "you what the image actually shows). For each section in your "
-            "JSON output, set that section's \"relevant_images\" field to "
-            "the filename(s) of any images whose content genuinely relates "
-            "to that section's topic — copy the filename exactly as shown "
-            "below. Most sections may have zero relevant images; only "
-            "assign an image where there's a real thematic match. Never "
-            "assign the same image to more than one section.\n" + lines
-        )
-
     if report_text.strip():
         trimmed = report_text.strip()
         if len(trimmed) > MAX_REPORT_CHARS:
-            trimmed = trimmed[:MAX_REPORT_CHARS] + "\n\n[...source truncated for token budget...]"
-        parts.append("SOURCE MATERIAL (extracted text):\n" + trimmed)
+            trimmed = trimmed[:MAX_REPORT_CHARS] + "\n\n[...source truncated...]"
+        intro.append("SOURCE MATERIAL (extracted text):\n" + trimmed)
     else:
-        parts.append(
+        intro.append(
             "No source document was uploaded. Base the newsletter on "
             "well-reasoned, general analytical knowledge of the topic "
             "template and target audience above."
         )
 
+    parts: list[dict] = [{"text": "\n\n".join(intro)}]
+
+    if images:
+        parts.append(
+            {
+                "text": (
+                    f"\n\n{len(images)} image(s) follow, each preceded by its "
+                    "filename. Look at what each one actually shows when "
+                    "deciding relevant_images for your sections."
+                )
+            }
+        )
+        for img in images:
+            parts.append({"text": f'Filename: "{img["filename"]}"'})
+            vision_bytes = _downsize_for_gemini(img["bytes"])
+            parts.append(
+                {
+                    "inline_data": {
+                        "mime_type": _mime_for(vision_bytes),
+                        "data": base64.b64encode(vision_bytes).decode("ascii"),
+                    }
+                }
+            )
+
     parts.append(
-        "Now produce the full newsletter as a single JSON object per the "
-        "schema you were given."
+        {
+            "text": (
+                "\n\nNow produce the full newsletter as a single JSON "
+                "object per the schema you were given."
+            )
+        }
     )
-    return "\n\n".join(parts)
+    return parts
 
 
-class GroqIncompleteJsonError(RuntimeError):
-    """Raised when Groq's json_object mode rejects a response because the
-    model ran out of output tokens before finishing the JSON object."""
-    pass
-
-
-def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int) -> str:
+def _call_gemini(system_prompt: str, user_parts: list[dict], max_tokens: int) -> str:
     api_key = _require_api_key()
+    endpoint = GEMINI_ENDPOINT_TEMPLATE.format(model=MODEL)
+
     payload = json.dumps(
         {
-            "model": MODEL,
-            "max_tokens": max_tokens,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"role": "user", "parts": user_parts}],
+            "generationConfig": {
+                "maxOutputTokens": max_tokens,
+                "responseMimeType": "application/json",
+            },
         }
     ).encode("utf-8")
 
     req = urllib.request.Request(
-        GROQ_ENDPOINT,
+        endpoint,
         data=payload,
         method="POST",
         headers={
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-            "Accept": "application/json",
-            # Groq's API sits behind Cloudflare, which blocks urllib's
-            # default "Python-urllib/x.y" User-Agent as bot traffic
-            # (Cloudflare error 1010). A normal-looking UA avoids that.
+            "x-goog-api-key": api_key,
             "User-Agent": "vuca-newsletter-app/1.0 (+https://github.com)",
         },
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=90) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             body = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8", errors="replace")
@@ -294,35 +342,47 @@ def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int) -> str:
             message = parsed.get("error", {}).get("message", error_body)
         except json.JSONDecodeError:
             message = error_body
+        if e.code in (400, 403) and "api key" in message.lower():
+            raise RuntimeError(f"Gemini API error ({e.code}): Invalid API key. {message}")
         if e.code == 429:
             raise RuntimeError(
-                f"Groq rate limit hit: {message}. Wait a minute and try again, "
-                "or lower MAX_REPORT_CHARS / MAX_OUTPUT_TOKENS."
+                f"Gemini rate limit hit: {message}. Free tier is limited to a "
+                "handful of requests per minute — wait a moment and try again."
             )
-        if e.code == 400 and "failed to generate json" in message.lower():
-            # The model ran out of max_tokens mid-object; Groq's json_object
-            # mode refuses to return the truncated result. This is
-            # recoverable — generate_newsletter_content retries once with
-            # a smaller ask.
-            raise GroqIncompleteJsonError(message)
-        raise RuntimeError(f"Groq API error ({e.code}): {message}")
+        raise RuntimeError(f"Gemini API error ({e.code}): {message}")
     except urllib.error.URLError as e:
-        raise RuntimeError(f"Could not reach Groq API: {e.reason}")
+        raise RuntimeError(f"Could not reach Gemini API: {e.reason}")
 
     try:
-        return body["choices"][0]["message"]["content"] or ""
+        candidate = body["candidates"][0]
+        finish_reason = candidate.get("finishReason", "")
+        text_parts = [p["text"] for p in candidate["content"]["parts"] if "text" in p]
+        text = "".join(text_parts)
+        if finish_reason == "MAX_TOKENS" and not text.strip().endswith("}"):
+            # Cut off mid-object — treat the same as a JSON parse failure
+            # so the caller's retry logic kicks in.
+            raise json.JSONDecodeError("Truncated at MAX_TOKENS", text, len(text))
+        return text
     except (KeyError, IndexError) as e:
-        raise RuntimeError(f"Unexpected Groq response shape: {e}. Body: {body}")
+        # Common cause: the prompt was blocked by safety filters, in which
+        # case candidates may be empty and promptFeedback explains why.
+        feedback = body.get("promptFeedback", {})
+        if feedback.get("blockReason"):
+            raise RuntimeError(
+                f"Gemini blocked this request: {feedback.get('blockReason')}. "
+                "Try different source material."
+            )
+        raise RuntimeError(f"Unexpected Gemini response shape: {e}. Body: {body}")
 
 
 _FALLBACK_LENGTH_OVERRIDE = """
 
-IMPORTANT — LENGTH OVERRIDE: your previous attempt ran out of output
-space before finishing valid JSON. This time, write MUCH shorter: only
-3 sections (not 4) with 1-2 short paragraphs each, 2-3 responses per
-VUCA block, 3 playbook items. Total prose across all fields should be
-roughly 600-800 words. Completing a valid, properly-closed JSON object
-matters far more than length — be terse.
+IMPORTANT — LENGTH OVERRIDE: your previous attempt did not return
+complete, valid JSON (likely cut off before finishing). This time,
+write shorter: only 4 sections (not 6-7) with 2-3 paragraphs each,
+3 responses per VUCA block, 3 playbook items. Total prose across all
+fields should be roughly 1,200-1,500 words. Completing a valid,
+properly-closed JSON object matters far more than length.
 """
 
 
@@ -336,17 +396,17 @@ def _parse_json_response(raw_text: str) -> dict:
     return json.loads(raw_text)
 
 
-def _reconcile_image_assignments(content: dict, image_descriptions: list[dict]) -> None:
+def _reconcile_image_assignments(content: dict, images: list[dict]) -> None:
     """
     Mutates content in place: validates each section's relevant_images
     against filenames that were actually uploaded (drops hallucinated
     ones), and ensures no image is claimed by more than one section
     (first section wins). Any uploaded image the model didn't assign
     anywhere gets listed in content["_unassigned_images"] so the caller
-    can fall back to round-robin placement for those specifically,
-    rather than silently dropping them.
+    can still include it (e.g. appended at the end of the document)
+    rather than silently dropping it.
     """
-    valid_filenames = {img["filename"] for img in image_descriptions}
+    valid_filenames = {img["filename"] for img in images}
     claimed = set()
     sections = content.get("sections") or []
 
@@ -364,7 +424,7 @@ def _reconcile_image_assignments(content: dict, image_descriptions: list[dict]) 
         sec["relevant_images"] = kept
 
     content["_unassigned_images"] = [
-        img["filename"] for img in image_descriptions if img["filename"] not in claimed
+        img["filename"] for img in images if img["filename"] not in claimed
     ]
 
 
@@ -378,26 +438,30 @@ def generate_newsletter_content(
     image_descriptions: list[dict],
 ) -> dict:
     """
-    Calls the Groq API and returns the parsed newsletter JSON dict.
+    Calls the Gemini API and returns the parsed newsletter JSON dict.
 
-    If the model runs out of its output-token budget mid-object (Groq
-    rejects this outright in json_object mode), this automatically
-    retries once with a much smaller ask so the person doesn't just see
-    a hard failure — they get a shorter but complete newsletter instead.
+    `image_descriptions` is named this way for backward compatibility
+    with app.py's call site, but each entry's actual image bytes (not
+    just a text description) get sent to Gemini directly — see
+    build_user_parts(). The dicts just need "filename" and "bytes".
+
+    If the model's response doesn't parse as valid JSON (e.g. it got cut
+    off before finishing), this retries once with a much smaller ask so
+    the person gets a shorter but complete newsletter instead of a hard
+    failure.
     """
+    images = image_descriptions  # kept the parameter name for app.py compatibility
     system_prompt = build_system_prompt(language)
-    user_prompt = build_user_prompt(
-        topic_key, custom_topic, audience, tone, report_text, image_descriptions
+    user_parts = build_user_parts(
+        topic_key, custom_topic, audience, tone, report_text, images
     )
 
     try:
-        raw_text = _call_groq(system_prompt, user_prompt, MAX_OUTPUT_TOKENS)
+        raw_text = _call_gemini(system_prompt, user_parts, MAX_OUTPUT_TOKENS)
         content = _parse_json_response(raw_text)
-    except (GroqIncompleteJsonError, json.JSONDecodeError):
-        # Retry once with a deliberately smaller ask — same input, a
-        # stricter length instruction appended to the system prompt.
+    except json.JSONDecodeError:
         fallback_system_prompt = system_prompt + _FALLBACK_LENGTH_OVERRIDE
-        raw_text = _call_groq(fallback_system_prompt, user_prompt, MAX_OUTPUT_TOKENS)
+        raw_text = _call_gemini(fallback_system_prompt, user_parts, MAX_OUTPUT_TOKENS)
         try:
             content = _parse_json_response(raw_text)
         except json.JSONDecodeError as e:
@@ -406,9 +470,8 @@ def generate_newsletter_content(
                 f"Raw start: {raw_text[:300]}"
             )
 
-    _reconcile_image_assignments(content, image_descriptions)
+    _reconcile_image_assignments(content, images)
 
-    # Fill sensible defaults / accent colour fallback.
     if not content.get("accent_name"):
         content["accent_name"] = TOPIC_ACCENTS.get(topic_key, TOPIC_ACCENTS["strategy"])["name"]
 
