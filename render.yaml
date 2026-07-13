@@ -6,29 +6,32 @@ services:
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     # --timeout 150: gunicorn kills a worker mid-request if it runs past
-    # this many seconds — the default (30s) is too short for this app's
-    # real pipeline (vision calls + content generation + a possible
-    # automatic retry + Word/infographic building can all add up).
-    # A killed worker sends the browser a connection reset instead of a
-    # response, which shows up client-side as "Unexpected end of JSON
-    # input" — that's this timeout being hit, not a data problem.
+    # this many seconds — the default (30s) is too short for a slower
+    # generation (a long report + several images + a possible automatic
+    # retry can add up). A killed worker sends the browser a connection
+    # reset instead of a response, which shows up client-side as
+    # "Unexpected end of JSON input" — that's this timeout being hit,
+    # not a data problem.
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 150
     healthCheckPath: /health
     envVars:
-      - key: GROQ_API_KEY
+      # Get a FREE Gemini API key (no credit card) at
+      # https://aistudio.google.com/apikey
+      - key: GEMINI_API_KEY
         sync: false
-      - key: GROQ_MODEL
-        value: openai/gpt-oss-120b
-      # Groq deprecates/replaces vision models on a regular cadence —
-      # check https://console.groq.com/docs/vision for the current one
-      # before assuming this value is still right.
-      - key: GROQ_VISION_MODEL
-        value: qwen/qwen3.6-27b
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
       - key: MAX_SKILL_CHARS
-        value: "1500"
+        value: "20000"
       - key: MAX_REPORT_CHARS
-        value: "1800"
+        value: "30000"
       - key: MAX_OUTPUT_TOKENS
-        value: "5500"
+        value: "8000"
+      - key: MAX_IMAGE_DIMENSION
+        value: "1200"
+      - key: IMAGE_JPEG_QUALITY
+        value: "80"
+      - key: MAX_IMAGES
+        value: "16"
       - key: MIN_GENERATION_INTERVAL_SECONDS
-        value: "62"
+        value: "6"
