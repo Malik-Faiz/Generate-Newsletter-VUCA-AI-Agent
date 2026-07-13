@@ -47,7 +47,6 @@ from flask_cors import CORS
 
 import newsletter_ai
 import report_reader
-import image_vision
 import docx_builder
 import infographic_builder
 
@@ -61,12 +60,11 @@ UPLOADS_TMP_DIR.mkdir(exist_ok=True)
 MAX_CONTENT_LENGTH = 60 * 1024 * 1024  # 60 MB total upload cap
 
 # Cap on total images processed per generation, counting each PDF page
-# as one image once expanded. This is a deliberate, predictable limit
-# rather than an implicit one — past this point, per-image vision calls,
-# prompt size, and docx build time all start compounding in ways that
-# risk timeouts or memory pressure on a free-tier deployment. Raise via
-# env var if you've moved off the free tier and have headroom to spare.
-MAX_IMAGES = int(os.environ.get("MAX_IMAGES", "12"))
+# as one image once expanded. Gemini accepts many images per request,
+# but this still exists as a sane, predictable ceiling — larger batches
+# still mean bigger requests and longer document-build time. Raise via
+# env var if your use case genuinely needs more.
+MAX_IMAGES = int(os.environ.get("MAX_IMAGES", "16"))
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
@@ -74,31 +72,28 @@ CORS(app)  # in case the frontend is ever served from a different origin
 
 # ── Generation queue / rate gate ─────────────────────────────────────
 #
-# Groq's free tier gives this app a shared ~8,000 tokens/minute budget
-# across EVERYONE hitting this backend — not per visitor. If two people
-# click Generate close together, even though Flask/gunicorn processes
-# requests one at a time, both generations still land inside the same
-# 60-second window and collide on that shared limit, causing a 429 from
-# Groq. The fix: track the last time a generation actually started, and
-# refuse (with a clear retry-after) any new one that arrives before
-# enough time has passed — regardless of whether it's a literal
-# concurrent request or just an unlucky-timing sequential one.
-#
-# This also happens to serialize genuinely simultaneous requests
-# correctly, since the check-and-reserve below is done under a lock.
+# Google's Gemini free tier limits requests-per-minute (roughly 10-15
+# RPM depending on model — check https://ai.google.dev/gemini-api/docs/rate-limits
+# for your project's actual current limit) rather than a tight shared
+# token budget the way Groq's free tier did. Since one generation is now
+# a single API call (no separate vision request), spacing generations a
+# few seconds apart keeps this comfortably under even a 10 RPM limit.
+# This also serialises genuinely simultaneous requests correctly, since
+# the check-and-reserve below is done under a lock.
 _rate_lock = threading.Lock()
 _last_generation_start = 0.0
 
-MIN_GENERATION_INTERVAL_SECONDS = int(os.environ.get("MIN_GENERATION_INTERVAL_SECONDS", "62"))
+MIN_GENERATION_INTERVAL_SECONDS = int(os.environ.get("MIN_GENERATION_INTERVAL_SECONDS", "6"))
 
 
 def _reserve_generation_slot():
     """
     Atomically checks whether enough time has passed since the last
-    generation to safely start a new one without colliding on Groq's
-    shared rate limit. If allowed, reserves the slot immediately
-    (updates the timestamp) so a second caller checking right after
-    correctly sees the reservation. Returns (allowed, wait_seconds).
+    generation to safely start a new one without exceeding Gemini's
+    free-tier requests-per-minute limit. If allowed, reserves the slot
+    immediately (updates the timestamp) so a second caller checking
+    right after correctly sees the reservation. Returns
+    (allowed, wait_seconds).
     """
     global _last_generation_start
     with _rate_lock:
@@ -130,7 +125,7 @@ def health():
             "api_key_set": newsletter_ai.api_key_set(),
             "skill_loaded": newsletter_ai.skill_loaded(),
             "model": newsletter_ai.MODEL,
-            "provider": "groq",
+            "provider": "gemini",
         }
     )
 
@@ -155,9 +150,9 @@ def generate():
                     "busy": True,
                     "wait_seconds": wait_seconds,
                     "detail": (
-                        "Another newsletter was generated very recently — Groq's "
-                        f"shared free-tier rate limit needs about {int(wait_seconds) + 1} "
-                        "more second(s) to clear before the next one can start."
+                        "Another generation just started — Gemini's free-tier "
+                        f"rate limit needs about {int(wait_seconds) + 1} more "
+                        "second(s) before the next one can start."
                     ),
                 }
             ),
@@ -226,16 +221,10 @@ def generate():
                 400,
             )
 
-        # ── Vision step: actually look at each image (best-effort — ──
-        # falls back to filename-only captions if this fails for any
-        # reason, so a vision hiccup never blocks the whole generation).
-        if images:
-            images = image_vision.describe_images(images)
-
         # ── Call the AI to generate structured content ──────────────
-        # (the model assigns each image to whichever section it's
-        # actually relevant to, based on the real descriptions above —
-        # not round-robin by filename order)
+        # Gemini sees the actual uploaded images directly in this one
+        # call (native multimodal) and assigns each to whichever
+        # section it's actually relevant to — no separate vision pass.
         content = newsletter_ai.generate_newsletter_content(
             topic_key=topic,
             custom_topic=custom_topic,
@@ -289,4 +278,16 @@ def serve_output(job_id, filename):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7755))
-    app.run(host="0.0.0.0", port=port, debug=os.environ.get("FLASK_DEBUG") == "1")
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=os.environ.get("FLASK_DEBUG") == "1",
+        # use_reloader=False: the reloader watches the whole project
+        # folder for changes and restarts the server on any change —
+        # but /generate writes new files into backend/outputs/ on every
+        # successful run, which the reloader was treating as "a change"
+        # and restarting mid-response, wiping the result the frontend
+        # was about to show. Debug mode's error pages still work fine
+        # without the reloader.
+        use_reloader=False,
+    )
