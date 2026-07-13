@@ -12,7 +12,7 @@ services:
     # reset instead of a response, which shows up client-side as
     # "Unexpected end of JSON input" — that's this timeout being hit,
     # not a data problem.
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 10000
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT 
     healthCheckPath: /health
     envVars:
       # Get a FREE Gemini API key (no credit card) at
